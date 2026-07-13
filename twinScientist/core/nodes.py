@@ -35,7 +35,9 @@ from core.prompts import (
     HYPOTHESIS_GENERATION_TEMPLATE,
     EXPERIMENT_DESIGN_TEMPLATE,
     REPORT_WRITING_TEMPLATE,
+    TOURNAMENT_EVAL_PROMPT,
 )
+from core.orchestrator import _check_orchestrator_stop_conditions, _hypothesis_statement_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -467,38 +469,50 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
         {"role": "user", "content": prompt},
     ]
 
-    content, _ = await _async_call_llm(llm, messages, temperature=0.8, max_tokens=4096)
+    content, _ = await _async_call_llm(llm, messages, temperature=0.8, max_tokens=8192)
 
-    # Parse single hypothesis from structured output
-    hyp_id = _create_hypothesis_id()
+    # Parse MULTIPLE hypotheses from structured output
+    # Split by "---" separator and parse each block
+    raw_blocks = [b.strip() for b in re.split(r'^---$', content, flags=re.MULTILINE) if b.strip()]
 
-    # Extract key fields from LLM output using regex
-    title_match = re.search(r'标题[：:]\s*(.+)', content)
-    statement_match = re.search(r'陈述[：:]\s*(.+)', content)
-    conf_match = re.search(r'(?:先验置信度P\(H\)|先验置信度)[：:]?\s*([\d.]+)', content)
-    test_match = re.search(r'可检验性评分[：:]?\s*(\d+)', content)
+    parsed_hypotheses = []
+    for block in raw_blocks:
+        title_match = re.search(r'标题[：:]\s*(.+)', block)
+        statement_match = re.search(r'陈述[：:]\s*(.+)', block)
+        conf_match = re.search(r'(?:先验置信度P\(H\)|先验置信度)[：:]?\s*([\d.]+)', block)
+        test_match = re.search(r'可检验性评分[：:]?\s*(\d+)', block)
+        evidence_req_match = re.search(r'证据需求[：:]\s*(.+?)(?:\n|$)', block)
+        reasoning_match = re.search(r'推理链条[：:]\s*(.+?)(?:\n推理|\n先验|\n证据|$)', block, re.DOTALL)
 
-    new_hyp = {
-        "id": hyp_id,
-        "title": title_match.group(1).strip() if title_match else f"H-{already_hyp_count + 1}",
-        "statement": statement_match.group(1).strip() if statement_match else content[:200],
-        "reasoning_chain": content[:500],
-        "confidence_prior": float(conf_match.group(1)) if conf_match else 0.5,
-        "confidence_posterior": 0.5,  # will be updated by reviewer
-        "testability": int(test_match.group(1)) if test_match else 5,
-        "status": "proposed",
-        "parent_id": None,
-        "children_ids": [],
-        "evidence_support": [],
-        "evidence_against": [],
-        "experiment_ids": [],
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
+        title = title_match.group(1).strip() if title_match else None
+        if not title:
+            continue  # skip malformed blocks
 
-    # Deep copy tree, add new hypothesis, prune dead branches
+        new_hyp = {
+            "id": _create_hypothesis_id(),
+            "title": title,
+            "statement": statement_match.group(1).strip() if statement_match else "",
+            "reasoning_chain": reasoning_match.group(1).strip() if reasoning_match else block[:500],
+            "confidence_prior": float(conf_match.group(1)) if conf_match else 0.5,
+            "confidence_posterior": 0.5,  # will be updated by reviewer
+            "testability": int(test_match.group(1)) if test_match else 5,
+            "evidence_needed": evidence_req_match.group(1).strip() if evidence_req_match else "",
+            "status": "proposed",
+            "parent_id": None,
+            "children_ids": [],
+            "evidence_support": [],
+            "evidence_against": [],
+            "experiment_ids": [],
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        parsed_hypotheses.append(new_hyp)
+
+    logger.info(f"[HypothesisGen] LLM returned {len(parsed_hypotheses)} candidate hypotheses")
+
+    # Deep copy tree, add all new hypotheses, prune dead branches
     tree = copy.deepcopy([dict(h) for h in state.get("hypothesis_tree", [])])
-    tree.append(new_hyp)
+    tree.extend(parsed_hypotheses)
 
     # PRUNING: Remove pruned/refuted leaf nodes from previous rounds
     pruned_count = 0
@@ -519,8 +533,119 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
 
 
 # ============================================================
-# Items 4, 6: Experiment Design
+# Item 27: Tournament Evaluation — Multi-Candidate Bracket Elimination
 # ============================================================
+
+async def node_tournament_eval(state: AgentState) -> dict:
+    """
+    【假设淘汰赛】从 N 个候选假设中两两比较，最终选出 1 个最优假设。
+
+    - 每轮两两配对比较（奇数个则随机轮空）
+    - 四个维度：逻辑严密性、文献/数据支撑、验证价值、可检验性
+    - 记录每个假设被淘汰的轮次、对手和原因
+    - 返回获胜假设（status 设为 active）+ 全部淘汰记录
+    """
+    hypotheses = copy.deepcopy([dict(h) for h in state.get("hypothesis_tree", [])])
+    if len(hypotheses) <= 1:
+        # 无需比较，直接标记为 active
+        for h in hypotheses:
+            if h.get("status") == "proposed":
+                h["status"] = "active"
+        return {"hypothesis_tree": hypotheses}
+
+    llm = _get_llm()
+
+    # Build bracket description for the LLM prompt
+    hyp_list_text = "\n".join(
+        f"{i + 1}. [{h['id']}] **{h.get('title', '?')}**\n   陈述: {h.get('statement', '')[:200]}\n   推理: {h.get('reasoning_chain', '')[:150]}\n   先验置信度: {h.get('confidence_prior', '?')}\n   证据需求: {h.get('evidence_needed', 'N/A')}"
+        for i, h in enumerate(hypotheses)
+    )
+
+    num_hyps = len(hypotheses)
+    user_content = TOURNAMENT_EVAL_PROMPT.replace("[N]", str(num_hyps))
+    user_content += f"\n\n## 当前候选假设列表\n{hyp_list_text}"
+
+    messages = [
+        {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    content, _ = await _async_call_llm(llm, messages, temperature=0.3, max_tokens=8192)
+
+    # Parse winner and elimination records from LLM output
+    winner_title_m = re.search(r'\*\*获胜假设\*\*:\s*(.+)', content)
+    winner_id_m = re.search(r'\*\*获胜假设ID\*\*:\s*(.+)', content)
+    winner_title = winner_title_m.group(1).strip() if winner_title_m else ""
+    winner_id = winner_id_m.group(1).strip() if winner_id_m else ""
+
+    # If we couldn't parse winner ID, fall back to matching by title
+    if not winner_id and winner_title:
+        for h in hypotheses:
+            if winner_title in h.get("title", "") or h.get("title", "") in winner_title:
+                winner_id = h["id"]
+                break
+
+    # Parse elimination table rows: | 标题 | ID | 轮次 | 被谁击败 | 原因 |
+    elim_records = []
+    table_rows = re.findall(r'\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|', content)
+    for row in table_rows:
+        title, hid, round_, defeated_by, reason = [r.strip() for r in row]
+        # Skip header-like entries
+        if "假设标题" in title or "标题" in title and "ID" in hid:
+            continue
+        elim_records.append({
+            "eliminated_title": title,
+            "eliminated_id": hid,
+            "eliminated_round": round_,
+            "defeated_by": defeated_by,
+            "reason": reason,
+        })
+
+    # Apply result: set winner status → active, others that were eliminated → refuted
+    win_count = 0
+    elim_count = 0
+    winner_statement = ""
+    for h in hypotheses:
+        if h["id"] == winner_id or (winner_title and winner_title in h.get("title", "")):
+            h["status"] = "active"
+            h["tournament_won"] = True
+            h["updated_at"] = _now_iso()
+            winner_statement = h.get("statement", "")
+            win_count += 1
+        elif h.get("status") == "proposed" and win_count == 0:
+            # First proposed hyp still marked active as fallback if winner not parsed
+            h["status"] = "active"
+            h["tournament_won"] = True
+            winner_statement = h.get("statement", "")
+            win_count += 1
+
+    # If winner was never matched, just pick the one with highest prior confidence
+    if win_count == 0:
+        best = max(hypotheses, key=lambda h: h.get("confidence_prior", 0))
+        best["status"] = "active"
+        best["tournament_won"] = True
+        winner_id = best["id"]
+        winner_statement = best.get("statement", "")
+        logger.info(f"[TournamentEval] Winner not parsed from output; selected highest-prior: {best['id']} ({best.get('title', '?')})")
+
+    # Mark remaining proposed hypotheses as candidates for next round or review
+    for h in hypotheses:
+        if h["id"] != winner_id and h.get("status") == "proposed":
+            h["status"] = "refuted_in_tournament"
+            elim_count += 1
+
+    logger.info(
+        f"[TournamentEval] Winner={winner_id}, statement_len={len(winner_statement)}, "
+        f"eliminated {elim_count} proposals, recorded {len(elim_records)} elimination records"
+    )
+
+    return {
+        "hypothesis_tree": hypotheses,
+        "elimination_records": elim_records,
+        "prev_round_winner_id": winner_id,
+        "prev_round_winner_statement": winner_statement,
+        "consecutive_failures": 0,
+    }
 
 async def node_experiment_design(state: AgentState) -> dict:
     """
@@ -984,6 +1109,8 @@ async def node_reflection(state: AgentState) -> dict:
     """
     【反思与修正】根因分析 → 派生修正性假设
     失败资产化：存储教训用于后续迭代
+
+    Orchestrator 分析在入口处自动计算，确保反思节点拿到完整的本轮评估上下文。
     """
     iteration = state.get("iteration", 0) + 1
     reviews = list(state.get("review_records", []))
@@ -992,6 +1119,15 @@ async def node_reflection(state: AgentState) -> dict:
 
     failed_hyp = next((h for h in hypotheses if h.get("status") == "needs_revision"), None)
     hyp_info = str(failed_hyp)[:500] if failed_hyp else "无指定失败假设"
+
+    # --- Compute orchestrator stop-check analysis so reflection has full context ---
+    orch_checks = _check_orchestrator_stop_conditions(state)
+    orch_reason = orch_checks.get("reason", "")
+    orch_evidence_strength = orch_checks.get("avg_evidence_strength", 0)
+    orch_similarity_score = orch_checks.get("similarity_score", 0)
+    orch_max_round_reached = orch_checks.get("max_round_reached", False)
+    orch_evidence_strong = orch_checks.get("evidence_strong", False)
+    orch_converged = orch_checks.get("converged", False)
 
     llm = _get_llm()
     messages = [
@@ -1004,7 +1140,15 @@ async def node_reflection(state: AgentState) -> dict:
                 f"评审分数: {latest_review.get('total_score', '?')}/100\n"
                 f"评审意见: {latest_review.get('comments', '无')[:500]}\n"
                 f"被评审假设: {hyp_info}\n\n"
-                f"请按格式输出根因分析和修正方案。"
+                f"### 📊 Orchestrator 决策分析（本轮验证结果）\n"
+                f"- 推理原因: {orch_reason}\n"
+                f"- 证据强度: {orch_evidence_strength:.4f}\n"
+                f"- 假设相似度(vs上一轮): {orch_similarity_score:.4f}\n"
+                f"- 已达最大轮次: {'是' if orch_max_round_reached else '否'}\n"
+                f"- 证据已足够强: {'是' if orch_evidence_strong else '否'}\n"
+                f"- 假设已收敛: {'是' if orch_converged else '否'}\n\n"
+                f"请基于以上全部信息，回答反思问题并生成修正后的假设。"
+                f"{'⚠️ 已达到最大轮次上限，请直接给出最终假设并标记为最终版本。' if orch_max_round_reached else ''}"
             ),
         },
     ]
@@ -1102,33 +1246,107 @@ async def node_reflection(state: AgentState) -> dict:
 
 async def node_termination_eval(state: AgentState) -> dict:
     """
-    【三层语义终止评估】
-    convergence × 0.4 + evidence_str × 0.3 + exploration × 0.3 > 0.85 → terminate
+    【三层语义终止评估 + 收敛度计算】
 
-    同时执行假设树修剪：移除 pruned/refuted 且无子节点的死分支。
+    收敛度计算公式：
+        convergence = 1 - |本轮假设与上一轮假设的语义相似度变化幅度|
+
+        完全相同 (similarity=1.0) → convergence=100%（稳定可停）
+        完全不同 (similarity=0)   → convergence=0%（仍在探索不能停）
+        部分相同 (similarity=0.7) → convergence=70%（在稳定但还没确定）
+        第1轮（无上一轮）         → convergence=0%
+
+    终止条件：
+        1. convergence ≥ 85% 且连续 2 轮保持不变 → 停止
+        2. 达到最大轮次 (5 轮)                    → 停止
+        3. 原始三路评分组合 ≥ 0.85                → 停止
     """
-    convergence = state.get("convergence_score", 0.0)
     evidence_chains = state.get("evidence_chains", [])
     exploration_exhausted = state.get("exploration_exhausted", False)
     iteration = state.get("iteration", 0)
 
+    # ---- Step 1: Compute convergence score ----
+    prev_statement = state.get("prev_round_winner_statement", "")
+    hypotheses = state.get("hypothesis_tree", [])
+
+    # Pick the current round's "winner": approved > tournament_won > highest posterior
+    active_hyp = None
+    for h in hypotheses:
+        if h.get("status") == "approved_by_reviewer":
+            active_hyp = h
+            break
+        if h.get("tournament_won"):
+            active_hyp = h
+            break
+    if not active_hyp:
+        active_hyp = max(hypotheses, key=lambda h: h.get("confidence_posterior", h.get("confidence_prior", 0))) if hypotheses else None
+
+    current_statement = active_hyp.get("statement", "") if active_hyp else ""
+
+    if iteration <= 1 or not prev_statement or not current_statement:
+        # Round 1 or no previous data — convergence is 0%
+        convergence = 0.0
+        logger.info(f"[TerminationEval] Round {iteration}: no previous round data, convergence=0.0")
+    else:
+        # Compute semantic similarity using bigram Jaccard (defined in orchestrator)
+        similarity = _hypothesis_statement_similarity(prev_statement, current_statement)
+        # Convergence = similarity (high similarity = converged)
+        convergence = round(similarity, 3)
+        logger.info(
+            f"[TerminationEval] Round {iteration}: similarity={similarity:.4f}, convergence={convergence:.3f}"
+        )
+
+    # Track convergence history
+    convergence_history = list(state.get("convergence_history", []))
+    convergence_history.append(convergence)
+
+    # ---- Step 2: Compute evidence strength ----
     if evidence_chains:
         evidence_str = sum(e.get("strength", 0.5) for e in evidence_chains) / len(evidence_chains)
     else:
-        # Heuristic: average posterior confidence of approved hypotheses
-        approved = [h for h in state.get("hypothesis_tree", []) if h.get("status") == "approved_by_reviewer"]
+        approved = [h for h in hypotheses if h.get("status") == "approved_by_reviewer"]
         if approved:
             evidence_str = sum(h.get("confidence_posterior", 0.5) for h in approved) / len(approved)
         else:
             evidence_str = 0.0
 
+    # ---- Step 3: Original combined score ----
     combined_score = convergence * 0.4 + evidence_str * 0.3 + (0.8 if exploration_exhausted else 0.0) * 0.3
-    should_terminate = (
-        combined_score >= 0.85
-        or iteration >= state.get("_max_iterations_", 15)  # Hard limit
-    )
 
-    # PRUNING at termination: clean up dead branches before report writing
+    # ---- Step 4: Check all termination conditions ----
+    should_terminate = False
+    stop_reason = ""
+
+    # Condition A: High convergence + stable for last 2 rounds
+    if convergence >= 0.85 and len(convergence_history) >= 2:
+        last_two = convergence_history[-2:]
+        if abs(last_two[0] - last_two[1]) < 0.05:  # changed less than 5% between last two
+            should_terminate = True
+            stop_reason = (
+                f"收敛度稳定高企: 当前={convergence:.1%}, "
+                f"上轮={last_two[0]:.1%}, 差值={abs(last_two[0]-last_two[1]):.1%} (<5%), 结论已稳定"
+            )
+            logger.info(f"[TerminationEval] CONVERGENCE_STABLE: {stop_reason}")
+
+    # Condition B: Hard limit — max 5 rounds
+    if iteration >= 5:
+        should_terminate = True
+        stop_reason = f"已达到最大轮次上限 (5/5)"
+        logger.info(f"[TerminationEval] MAX_ROUNDS_REACHED: {stop_reason}")
+
+    # Condition C: Original combined score threshold
+    if combined_score >= 0.85 and not should_terminate:
+        should_terminate = True
+        stop_reason = (
+            f"综合评分达标 (combined_score={combined_score:.3f} ≥ 0.85), 证据充分可终止"
+        )
+        logger.info(f"[TerminationEval] COMBINED_SCORE_HIGH: {stop_reason}")
+
+    if not should_terminate:
+        stop_reason = f"未满足任何停止条件 (convergence={convergence:.1%}, combined={combined_score:.3f})，继续下一轮"
+        logger.info(f"[TerminationEval] CONTINUE: {stop_reason}")
+
+    # ---- Step 5: PRUNING at termination ----
     tree = copy.deepcopy([dict(h) for h in state.get("hypothesis_tree", [])])
     kept_tree = []
     pruned_at_term = 0
@@ -1138,15 +1356,21 @@ async def node_termination_eval(state: AgentState) -> dict:
         else:
             kept_tree.append(h)
 
-    logger.info(f"[TerminationEval] Score={combined_score:.3f}, terminate={should_terminate}, pruned {pruned_at_term} dead branches")
+    logger.info(
+        f"[TerminationEval] Score={combined_score:.3f}, terminate={should_terminate}, "
+        f"convergence={convergence:.3f}, pruned {pruned_at_term} dead branches"
+    )
 
     result = {
-        "convergence_score": round(convergence, 3),
+        "convergence_score": convergence,
+        "convergence_history": convergence_history,
+        "prev_round_winner_statement": current_statement,  # Save for next round comparison
         "evidence_strength": round(evidence_str, 3),
         "exploration_exhausted": exploration_exhausted,
         "combined_score": round(combined_score, 3),
         "should_terminate": should_terminate,
-        "hypothesis_tree": kept_tree if not should_terminate else tree,  # Keep tree as-is for report
+        "stop_reason": stop_reason,
+        "hypothesis_tree": kept_tree if not should_terminate else tree,
     }
 
     return {"_termination_result": result}
@@ -1170,6 +1394,7 @@ async def node_report_writing(state: AgentState) -> dict:
     literature_summary = state.get("literature_summary", "")
     domain = state.get("domain", "环境—人体关联")
     query = state.get("query", "")
+    elimination_records = list(state.get("elimination_records", []))
 
     convergence_val = state.get("convergence_score", 0.0) * 100
     iteration_val = state.get("iteration", 0)
@@ -1487,7 +1712,45 @@ async def node_report_writing(state: AgentState) -> dict:
     if hyp_rows:
         for row_line in hyp_rows.strip().split(NL):
             parts.append(row_line)
-    parts.append(f"### 证据链汇总 ({len(evidence_chains)} 条)")
+
+    # --- Elimination Tournament Records ---
+    parts.append(f"\n### 本轮候选假设数量：{len(elimination_records) + 1} 个")
+    parts.append("")
+    parts.append("### 淘汰赛记录")
+    parts.append("| 假设ID | 假设简述 | 状态 | 淘汰理由 |")
+    parts.append("|--------|---------|------|---------|")
+
+    # Collect all hypotheses that participated in the tournament
+    eliminated_ids = set()
+    winner_id_from_tournament = None
+
+    # Parse from elimination records
+    for rec in elimination_records:
+        loser_id = rec.get("eliminated_id", "?")
+        loser_title = rec.get("eliminated_title", "?")
+        round_ = rec.get("eliminated_round", "?")
+        reason = rec.get("reason", "未提供具体原因")
+
+        # Get a brief summary of this hypothesis
+        hypo_info = next((h for h in hypotheses if h["id"] == loser_id), {})
+        brief = hypo_info.get("statement", "")[:40] or loser_title
+
+        parts.append(f"| {loser_id} | {brief} | 淘汰 | {reason} |")
+        eliminated_ids.add(loser_id)
+
+    # Find and record the winner (if any)
+    candidates = [h for h in hypotheses if h.get('status') not in ('pruned', 'refuted', 'refuted_in_tournament')]
+    if candidates:
+        # Pick the one with tournament_won flag or highest posterior
+        winner = next((h for h in candidates if h.get("tournament_won")),
+                      max(candidates, key=lambda h: h.get("confidence_posterior", h.get("confidence_prior", 0))))
+        winner_id = winner["id"]
+        winner_brief = winner.get("statement", "")[:40] or winner.get("title", "?")
+        parts.append(f"| {winner_id} | {winner_brief} | 优胜 | - |")
+
+    parts.append("---")
+
+    parts.append(f"\n### 证据链汇总 ({len(evidence_chains)} 条)")
     parts.append("| type | strength | method | direction |")
     parts.append("|------|----------|--------|-----------|")
     if ev_rows:
@@ -1497,10 +1760,33 @@ async def node_report_writing(state: AgentState) -> dict:
     parts.append("")
     parts.append("*本报告由 twinScientist AI Scientist 系统自动生成*")
     parts.append("*生成时间: 当前UTC时间*")
-    parts.append(f"*迭代轮次: {iteration_val} | 收敛度: {convergence_val:.0f}%*")
+    parts.append(f"*迭代轮次: {iteration_val}/5 | 收敛度: {convergence_val:.0f}%*")
     parts.append("*Agent: Qwen系列 (阿里云百炼平台) | 编排: LangGraph*")
 
     report = NL.join(parts)
+
+    # --- Iteration status check (inserted before report output) ---
+    iter_status_lines = []
+    if iteration_val >= 1:
+        iter_status_lines.append(f"**迭代状态**: ✅ 已执行 {iteration_val} 轮迭代反思循环")
+    else:
+        iter_status_lines.append(
+            "**迭代状态**: ⚠️ 反思循环未被执行（当前为第 0 轮）。"
+            "本轮仅完成初始验证，建议增加迭代轮次以提升结论可靠性。"
+        )
+
+    insert_idx = 1  # right after "# 科学假设与研究计划"
+    for line in reversed(iter_status_lines):
+        parts.insert(insert_idx, line)
+    parts.insert(insert_idx, "")
+    parts.insert(insert_idx, "---")
+    parts.insert(insert_idx, "")
+    report = NL.join(parts)
+
+    # Also inject into the metadata footer area
+    footer_marker = f"*迭代轮次: {iteration_val}/5 | 收敛度: {convergence_val:.0f}%*"
+    status_footer = f"| 迭代状态: {'✅ 已执行{iteration_val}轮' if iteration_val >= 1 else '⚠️ 未执行'}*"
+    report = report.replace(footer_marker, f"*迭代轮次: {iteration_val}/5 收敛度: {convergence_val:.0f}%{status_footer}")
 
     logger.info("[ReportWriting] Report generated successfully with real data")
     logger.info(f"[ReportWriting] Final report length={len(report)}, Section 9 present={('以下基于真实数据分析' in report) or ('理论可行性验证框架' in report)}")

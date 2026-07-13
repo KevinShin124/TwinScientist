@@ -51,6 +51,7 @@ class ReportGenerator:
         experiments = state.get("experiment_records", [])
         evidence_chains = state.get("evidence_chains", [])
         reviews = state.get("review_records", [])
+        elimination_records = state.get("elimination_records", [])
         fact_extraction = state.get("fact_extraction", [])
         literature_summary = state.get("literature_summary", "")
         domain = state.get("domain", "环境—人体关联")
@@ -110,6 +111,7 @@ class ReportGenerator:
 - **学科领域**: {domain}
 - **研究轮次**: {iteration}
 - **系统收敛度**: {convergence:.1%}
+- **迭代状态**: {'✅ 已执行 ' + str(iteration) + ' 轮迭代反思循环' if iteration >= 1 else '⚠️ 反思循环未被执行（当前为第 0 轮）。本轮仅完成初始验证，建议增加迭代轮次以提升结论可靠性。'}
 
 ---
 
@@ -269,6 +271,14 @@ Y(t) = f(X(t)) + ε(t)
 |--------|------|------|----------|-------------|----------|
 {self._format_table([{"id": h.get("id",""), "title": h.get("title","")[:30], "status": h.get("status",""), "prior": h.get("confidence_prior","?"), "posterior": h.get("confidence_posterior","?"), "testability": h.get("testability","?")} for h in hypothesis_tree], ["id", "title", "status", "prior", "posterior", "testability"])}
 
+### 本轮候选假设数量：{len(hypothesis_tree)} 个
+
+### 淘汰赛记录
+| 假设ID | 假设简述 | 状态 | 淘汰理由 |
+|--------|---------|------|---------|
+{"".join(f"| {r.get('eliminated_id','?')[:16]} | {r.get('reason','').split(':')[-1][:30] if r.get('reason') else '未提供'} | 淘汰 | {r.get('reason','')} |" for r in elimination_records)}
+{f"| [最终胜者] | {best_hyp.get('title', '')[:20] if best_hyp else ''} | 优胜 | - |" if elimination_records else ""}
+
 ### 证据链汇总 ({len(evidence_chains)} 条)
 {self._format_table(evidence_items, ["type", "strength", "method", "direction"]) if evidence_items else "- [因果推断结果将从数据分析节点自动填充]"}
 
@@ -276,7 +286,7 @@ Y(t) = f(X(t)) + ε(t)
 
 *本报告由 twinScientist AI Scientist 系统自动生成*
 *生成时间: {now_iso}*
-*迭代轮次: {iteration} | 收敛度: {convergence:.1%}*
+*迭代轮次: {iteration}/5 | 收敛度: {convergence:.1%}*
 *Agent: Qwen系列 (阿里云百炼平台) | 编排: LangGraph*
 """
         return report

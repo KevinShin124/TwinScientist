@@ -97,19 +97,43 @@ async def run_research(question: str, domain: str, max_iter: int):
 
 def interactive_mode():
     """交互模式"""
+    from data.organizer import organize_directory, UPLOAD_DIR
+
     print("[twinScientist] twinScientist — 自主科研智能体\n")
-    print("请输入你的研究问题，或键入 'quit' 退出。\n")
+    print("=" * 60)
+    print("  可用指令：")
+    print("    [研究问题] <您的问题>   — 启动 AI 科研分析")
+    print("    [数据上传]              — 自动整理放入 data/upload/ 的数据文件")
+    print("    quit / exit / q         — 退出")
+    print("=" * 60 + "\n")
 
     while True:
-        question = input("[研究问题] 研究问题: ").strip()
-        if not question:
+        raw = input("twinScientist > ").strip()
+        if not raw:
             continue
-        if question.lower() in ("quit", "exit", "q"):
+
+        # Check for data upload command
+        if raw.lower().startswith("[数据上传]") or raw.lower() == "upload":
+            print("\n[data-upload] 正在扫描 data/upload/ 目录...")
+            results = organize_directory(verbose=True)
+            if results and all(r["skipped"] for r in results):
+                print("\n[data-upload] 所有文件均无法识别类型。")
+                print("        请确保 CSV 第一行为列名，包含相关指标（如 T、CO2、ppg、心率等）。")
+            elif not results:
+                print(f"\n[data-upload] data/upload/ 为空，请将数据文件放入 {UPLOAD_DIR} 后重试。\n")
+            else:
+                moved = sum(1 for r in results if r["moved"])
+                print(f"\n[data-upload] ✅ {moved} 个文件已分类到对应数据目录，可开始研究了！\n")
+            continue
+
+        if raw.lower() in ("quit", "exit", "q"):
             print("再见！")
             break
 
+        # Research question mode
+        question = raw
         domain = input("学科领域 [默认: 环境—人体关联]: ").strip() or "环境—人体关联"
-        max_iter = int(input("最大迭代次数 [默认: 10]: ") or "10")
+        max_iter = int(input("最大迭代次数 [默认: 5]: ") or "5")
 
         print()
         try:
@@ -133,7 +157,7 @@ def main():
     parser = argparse.ArgumentParser(description="twinScientist — AI Scientist CLI")
     parser.add_argument("--question", "-q", type=str, help="研究问题")
     parser.add_argument("--domain", "-d", type=str, help="学科领域")
-    parser.add_argument("--iterations", "-i", type=int, default=10, help="最大迭代次数")
+    parser.add_argument("--iterations", "-i", type=int, default=5, help="最大迭代次数（最多5轮）")
     parser.add_argument("--ui", action="store_true", help="启动 Gradio Web UI")
 
     args = parser.parse_args()

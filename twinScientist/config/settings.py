@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # ============================================================
     # Layer 2: Orchestrator
     # ============================================================
-    max_iterations: int = 15
+    max_iterations: int = 5
 
     # ============================================================
     # Layer 4: Human-in-the-Loop
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
         self.bailian_base_url = self.bailian_base_url or _os.getenv("BAILIAN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.model_name = self.model_name or _os.getenv("MODEL_NAME", "qwen-max")
-        self.max_iterations = self.max_iterations or int(_os.getenv("MAX_ITERATIONS", "15"))
+        self.max_iterations = self.max_iterations or int(_os.getenv("MAX_ITERATIONS", "5"))
         self.human_approval_enabled = self.human_approval_enabled if isinstance(self.human_approval_enabled, bool) else _os.getenv("HUMAN_APPROVAL_ENABLED", "true").lower() == "true"
         self.output_target = self.output_target or _os.getenv("OUTPUT_TARGET", "console")
         self.log_level = self.log_level or _os.getenv("LOG_LEVEL", "INFO")

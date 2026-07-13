@@ -26,6 +26,161 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
+# Semantic Similarity Calculation
+# ============================================================
+
+def _hypothesis_statement_similarity(stmt_a: str, stmt_b: str) -> float:
+    """
+    计算两个假设陈述的语义相似度 (0-1)。
+    使用字符级 bigram Jaccard 相似度。
+    """
+    if not stmt_a or not stmt_b:
+        return 0.0
+    # Normalize whitespace
+    a = ' '.join(stmt_a.strip().split())
+    b = ' '.join(stmt_b.strip().split())
+    # Character bigrams for Chinese-friendly tokenization
+    def bigrams(s):
+        return set(s[i:i+2] for i in range(len(s)-1)) if len(s) > 1 else {s}
+    a_set = bigrams(a)
+    b_set = bigrams(b)
+    if not a_set or not b_set:
+        return 0.0
+    intersection = len(a_set & b_set)
+    union = len(a_set | b_set)
+    return round(intersection / union, 4)
+
+
+def _check_orchestrator_stop_conditions(state: AgentState) -> dict:
+    """
+    Orchestrator 每轮结束时的停止/继续决策检查。
+
+    Returns: {
+        "stop": bool,               # 是否应该停止迭代
+        "reason": str,              # 停止原因
+        "max_round_reached": bool,  # 是否达到最大轮次
+        "evidence_strong": bool,    # 证据强度 + 评审分数是否达标
+        "converged": bool,          # 假设语义是否已收敛
+        "similarity_score": float,  # 当前假设与上一轮的相似度
+    }
+    """
+    result = {
+        "stop": False,
+        "reason": "",
+        "max_round_reached": False,
+        "evidence_strong": False,
+        "converged": False,
+        "similarity_score": 0.0,
+    }
+
+    iteration = state.get("iteration", 0)
+    max_iterations = min(state.get("_max_iterations_", 5), 5)  # 5轮硬上限
+
+    # --- Condition 1: 检查当前轮次是否达到最大轮次（5轮）---
+    if iteration >= max_iterations:
+        result["max_round_reached"] = True
+        result["stop"] = True
+        result["reason"] = f"已达到最大轮次上限 ({max_iterations}/5)"
+        logger.info(f"[OrchestratorStop] MAX_ROUNDS_REACHED: {result['reason']}")
+        return result
+
+    # --- Gather evidence strength and latest review score ---
+    evidence_chains = state.get("evidence_chains", [])
+    reviews = state.get("review_records", [])
+
+    # Evidence strength: average of all chain strengths
+    if evidence_chains:
+        avg_evidence_strength = sum(
+            e.get("strength", 0.5) for e in evidence_chains
+        ) / len(evidence_chains)
+    else:
+        # Fallback to approved hypothesis posterior confidence
+        approved_hyps = [
+            h for h in state.get("hypothesis_tree", [])
+            if h.get("status") == "approved_by_reviewer"
+        ]
+        if approved_hyps:
+            avg_evidence_strength = max(
+                h.get("confidence_posterior", 0.5) for h in approved_hyps
+            )
+        else:
+            avg_evidence_strength = 0.0
+
+    # Latest review score
+    if reviews:
+        latest_review = reviews[-1]
+        latest_review_score = latest_review.get("total_score", 0)
+    else:
+        latest_review_score = 0
+
+    # --- Condition 2: 检查本轮证据强度 > 0.85 且评审得分 > 80 ---
+    if avg_evidence_strength > 0.85 and latest_review_score > 80:
+        result["evidence_strong"] = True
+        result["stop"] = True
+        result["reason"] = (
+            f"证据强度充足 (avg_strength={avg_evidence_strength:.3f}, "
+            f"latest_score={latest_review_score}/100)，结论明确可终止"
+        )
+        logger.info(f"[OrchestratorStop] EVIDENCE_STRONG: {result['reason']}")
+        return result
+
+    # --- Condition 3: 检查当前假设与上一轮假设的语义相似度 ---
+    # Get all approved hypotheses from the tree
+    approved_hyps = [
+        h for h in state.get("hypothesis_tree", [])
+        if h.get("status") == "approved_by_reviewer"
+    ]
+
+    if len(approved_hyps) >= 2:
+        # Sort by created_at timestamp to get chronological order
+        sorted_hyps = sorted(approved_hyps, key=lambda h: h.get("created_at", ""))
+        prev_stmt = sorted_hyps[-2].get("statement", "")
+        curr_stmt = sorted_hyps[-1].get("statement", "")
+        similarity = _hypothesis_statement_similarity(prev_stmt, curr_stmt)
+        result["similarity_score"] = similarity
+
+        if similarity > 0.95:
+            result["converged"] = True
+            result["stop"] = True
+            result["reason"] = (
+                f"假设已收敛：当前假设与上一轮语义相似度 = {similarity:.4f} (> 0.95)"
+            )
+            logger.info(f"[OrchestratorStop] CONVERGED: {result['reason']}")
+            return result
+    elif len(approved_hyps) == 1:
+        # Only one approved — compute similarity against the original query as baseline
+        query = state.get("query", "")
+        if query and approved_hyps[0].get("statement"):
+            result["similarity_score"] = _hypothesis_statement_similarity(query, approved_hyps[0]["statement"])
+
+    # --- None of the stop conditions met → continue to next round ---
+    result["stop"] = False
+    result["reason"] = "未满足任何停止条件，进入下一轮反思"
+    logger.info("[OrchestratorStop] CONTINUE: No stop condition met")
+    return result
+
+
+def _get_latest_hypothesis_text(state: AgentState) -> str | None:
+    """Return the statement text of the most recently approved hypothesis."""
+    hypotheses = state.get("hypothesis_tree", [])
+    approved = [
+        h for h in hypotheses if h.get("status") == "approved_by_reviewer"
+    ]
+    if not approved:
+        # Fallback to latest active/proposed hypothesis
+        candidates = [
+            h for h in hypotheses if h.get("status") in ("active", "proposed")
+        ]
+        if not candidates:
+            return None
+    else:
+        candidates = approved
+    # Sort by created_at to get the newest
+    sorted_candidates = sorted(candidates, key=lambda h: h.get("created_at", ""))
+    return sorted_candidates[-1].get("statement", "") if sorted_candidates else None
+
+
+# ============================================================
 # State Evaluation Metrics
 # ============================================================
 
@@ -98,7 +253,7 @@ def evaluate_state(state: AgentState) -> dict:
 
     # --- Iteration Context ---
     iteration = state.get("iteration", 0)
-    max_iter = state.get("_max_iterations_", 15)
+    max_iter = min(state.get("_max_iterations_", 5), 5)  # 5轮硬上限
     consecutive_failures = state.get("consecutive_failures", 0)
     convergence = state.get("convergence_score", 0.0)
 
@@ -118,6 +273,8 @@ def evaluate_state(state: AgentState) -> dict:
         "convergence_score": convergence,
         "num_experiments": len(experiments),
         "num_reviews": len(reviews),
+        # --- Orchestrator convergence info for next round comparison ---
+        "latest_hypothesis_statement": _get_latest_hypothesis_text(state) if hypotheses else "",
     }
 
 
@@ -171,6 +328,10 @@ DECISION_PROMPT_TEMPLATE = """## 任务：科研编排决策
 
 你是 twinScientist 系统的 Orchestrator。根据以下状态诊断，选择**最合适的一个**认知节点继续推进。
 
+**⚠️ 多轮循环硬约束（最多 5 轮）：**
+- 当前轮次超过 5 轮时，必须终止并进入 report_writing
+- 每一轮结束后都必须回答：①本轮实验有哪些漏洞或局限？②如果修正这些漏洞，假设应该怎么改？③修正后的假设是否值得再验证一次？
+
 {state_diagnosis}
 
 **上一步刚执行的操作**: {last_executed_action}
@@ -187,6 +348,7 @@ DECISION_PROMPT_TEMPLATE = """## 任务：科研编排决策
 6. **每个假设都应该被验证**：不要跳过 experiment_design 直接进入 report_writing
 7. **禁止无效循环**：如果连续生成→评审→拒绝→重新生成的循环超过 3 轮，换策略（改变搜索方向或缩小范围）
 8. **禁止重复执行**：`last_executed_action` 是上一步刚执行完的节点，不要再次选择它（termination_eval 除外）
+9. **五轮强制上限**：无论研究进展如何，第 5 轮结束后必须终止
 
 ## 输出格式（严格遵守）
 ```
@@ -258,8 +420,7 @@ def _deterministic_fallback(state: AgentState) -> str:
     if status_counts.get("needs_revision", 0) > 0:
         return "reflection"
 
-    max_iter = state.get("_max_iterations_", 15)
-    if state.get("iteration", 0) >= max_iter:
+    if state.get("iteration", 0) >= 5:  # 5轮硬上限
         return "termination_eval"
 
     return "hypothesis_generation"
@@ -315,8 +476,7 @@ def route_after_reviewer(state: AgentState) -> str:
 
 def route_after_reflection(state: AgentState) -> str:
     """反思后：检查预算，决定再生成还是终止"""
-    max_iter = state.get("_max_iterations_", 15)
-    if state.get("iteration", 0) >= max_iter or state.get("consecutive_failures", 0) >= 3:
+    if state.get("iteration", 0) >= 5 or state.get("consecutive_failures", 0) >= 3:  # 5轮硬上限
         return "terminating"
     return "hypothesis_generation"
 

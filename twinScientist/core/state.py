@@ -198,6 +198,7 @@ class AgentState(TypedDict, total=False):
     # Hypothesis Tree
     # ============================================================
     hypothesis_tree: list[dict]         # 动态假设树根节点列表（直接替换）
+    elimination_records: list[dict]     # 淘汰赛记录：{round, pair, winner_id, loser_id, reason}
 
     # ============================================================
     # Orchestrator Runtime State
@@ -205,8 +206,11 @@ class AgentState(TypedDict, total=False):
     orchestrator_state: str             # "researching" | "experimenting" | "reviewing" | "writing" | "converged"
     uncertainty_level: float            # 当前不确定性估计 0-1
     convergence_score: float            # 语义收敛度 0-1
+    convergence_history: list[float]    # 历史收敛度序列，用于检测连续稳定 (e.g. [0.0, 0.72, 0.68])
     exploration_exhausted: bool         # 探索是否已穷尽
     consecutive_failures: int           # 连续失败计数（防死循环）
+    prev_round_winner_id: str | None    # 上一轮优胜假设 ID（用于跨轮相似度比较）
+    prev_round_winner_statement: str | None  # 上一轮优胜假设的陈述（用于语义相似度计算）
     next_step: str | None               # 下一步操作（供路由使用）
 
     # ============================================================

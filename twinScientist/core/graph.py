@@ -21,6 +21,7 @@ from core.state import AgentState
 from core.nodes import (
     node_literature_review,
     node_hypothesis_generation,
+    node_tournament_eval,
     node_experiment_design,
     node_data_analysis,
     node_interpretation,
@@ -34,16 +35,40 @@ from core.nodes import (
     node_evolution_manager,
 )
 from core.orchestrator import (
-    llm_orchestrator_decision,
+    _check_orchestrator_stop_conditions,
     route_after_literature,
     route_after_experiment,
     route_after_analysis,
-    route_after_reviewer,
     route_after_reflection,
     route_after_termination,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _after_reviewer_route(state: AgentState) -> str:
+    """
+    After reviewer_agent finishes, delegate to the orchestrator stop-check.
+
+    Routing logic:
+      1) Max rounds reached → termination_eval
+      2) Evidence >0.85 AND score >80 → report_writing (conclusion clear)
+      3) Hypothesis similarity >0.95 → termination_eval (converged)
+      4) Otherwise → reflection (continue next round)
+    """
+    checks = _check_orchestrator_stop_conditions(state)
+
+    if checks["stop"]:
+        if checks["max_round_reached"] or checks["converged"]:
+            logger.info(f"[AfterReviewer] ORCHESTRATOR STOPPED (terminate): {checks['reason']}")
+            return "termination_eval"
+        else:
+            # Evidence strong — skip reflection, go straight to report writing
+            logger.info(f"[AfterReviewer] EVIDENCE_STRONG: {checks['reason']}")
+            return "report_writing"
+
+    logger.info(f"[AfterReviewer] CONTINUE: {checks['reason']}")
+    return "reflection"
 
 
 def build_cognitive_graph() -> "CompiledGraph":
@@ -66,11 +91,15 @@ def build_cognitive_graph() -> "CompiledGraph":
      └──────┬───────┘
             ▼ (如果facts>=2)
      ┌──────────────────┐
-     │hypothesis_gen    │  ← 生成假设
+     │hypothesis_gen    │  ← 生成5-10个候选假设
      └──────┬───────────┘
             ▼ (确定性的下一步)
      ┌──────────────────┐
-     │experiment_design │  ← 为假设设计实验
+     │tournament_eval   │  ← 淘汰赛：两两比较选出优胜者
+     └──────┬───────────┘
+            ▼ (确定性的下一步)
+     ┌──────────────────┐
+     │experiment_design │  ← 为获胜假设设计实验
      └──────┬───────────┘
             ▼ (确定性的下一步)
      ┌──────────────────┐
@@ -102,6 +131,7 @@ def build_cognitive_graph() -> "CompiledGraph":
     workflow.add_node("ethics_check", node_ethics_check)
     workflow.add_node("literature_review", node_literature_review)
     workflow.add_node("hypothesis_generation", node_hypothesis_generation)
+    workflow.add_node("tournament_eval", node_tournament_eval)
     workflow.add_node("experiment_design", node_experiment_design)
     workflow.add_node("data_analysis", node_data_analysis)
     workflow.add_node("interpretation", node_interpretation)
@@ -112,7 +142,6 @@ def build_cognitive_graph() -> "CompiledGraph":
     workflow.add_node("human_approval", node_human_approval)
     workflow.add_node("evolution_manager", node_evolution_manager)
     workflow.add_node("termination_eval", node_termination_eval)
-    workflow.add_node("orchestrator_plan", _node_orchestrator_plan)
 
     def _route_ethics(state: AgentState) -> str:
         """Route based on ethics check result — Item 15"""
@@ -147,19 +176,21 @@ def build_cognitive_graph() -> "CompiledGraph":
         },
     )
 
-    # Hypothesis generation → deterministic route to experiment design
-    # This ensures every proposed hypothesis gets an experiment designed for it
+    # Hypothesis generation → Tournament Eval (elimination bracket)
     workflow.add_conditional_edges(
         "hypothesis_generation",
-        lambda s: "experiment_design" if any(
+        lambda s: "tournament_eval" if any(
             h.get("status") in ("proposed", "active", "approved_by_reviewer")
             for h in s.get("hypothesis_tree", [])
         ) else "reflection",
         {
-            "experiment_design": "experiment_design",
+            "tournament_eval": "tournament_eval",
             "reflection": "reflection",
         },
     )
+
+    # Tournament eval → Experiment design (winner gets experiments designed)
+    workflow.add_edge("tournament_eval", "experiment_design")
 
     # Experiment design → data analysis (deterministic)
     workflow.add_edge("experiment_design", "data_analysis")
@@ -170,20 +201,25 @@ def build_cognitive_graph() -> "CompiledGraph":
     # Interpretation → Reviewer (deterministic)
     workflow.add_edge("interpretation", "reviewer_agent")
 
-    # Reviewer → conditional based on score
+    # Reviewer → Orchestrator stop/continue check:
+    #   1) Max rounds (5)? → termination_eval
+    #   2) Evidence >0.85 AND review >80? → report_writing
+    #   3) Hypothesis similarity >0.95? → termination_eval
+    #   4) Otherwise → reflection (next round)
     workflow.add_conditional_edges(
         "reviewer_agent",
-        route_after_reviewer,
+        _after_reviewer_route,
         {
             "reflection": "reflection",
             "report_writing": "report_writing",
+            "termination_eval": "termination_eval",
         },
     )
 
     # Reflection → back to hypothesis_generation (for revision loop)
     workflow.add_conditional_edges(
         "reflection",
-        lambda s: "terminating" if s.get("iteration", 0) >= s.get("_max_iterations_", 15) or s.get("consecutive_failures", 0) >= 3 else "hypothesis_generation",
+        lambda s: "terminating" if s.get("iteration", 0) >= 5 or s.get("consecutive_failures", 0) >= 3 else "hypothesis_generation",
         {
             "hypothesis_generation": "hypothesis_generation",
             "terminating": "termination_eval",
@@ -214,23 +250,6 @@ def build_cognitive_graph() -> "CompiledGraph":
     )
 
     return compiled
-
-
-async def _node_orchestrator_plan(state: AgentState) -> dict:
-    """
-    Orchestrator 规划节点 — LLM 驱动的决策引擎。
-
-    Each iteration开始时调用一次，评估当前状态并输出
-    下一个要执行的操作。将决策结果存储在 state['next_step']
-    供后续路由使用。
-    """
-    chosen_action = await llm_orchestrator_decision(state)
-    logger.info(f"[OrchestratorPlan] Selected next action: {chosen_action}")
-
-    return {
-        "next_step": chosen_action,
-        "current_action": chosen_action,
-    }
 
 
 # Export for main entry

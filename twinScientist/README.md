@@ -204,6 +204,7 @@ twinScientist/
 - [ ] 将 `causal_inference.py` 中的占位替换为真实算法调用
 - [ ] 准备至少一组真实数据集放入 `data/` 目录
 - [ ] 测试端到端流水线：CLI → Report 生成
+- [ ] 确认 5 轮循环硬上限正常工作（每一轮自动回答三个反思问题）
 
 ### 🟡 P1 — 强烈推荐
 - [ ] 实现 Tournament 淘汰逻辑（Item 26）
