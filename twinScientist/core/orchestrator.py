@@ -482,10 +482,37 @@ def route_after_reflection(state: AgentState) -> str:
 
 
 def route_after_termination(state: AgentState) -> str:
-    """终止评估：评分达标写报告，否则回到探索"""
+    """
+    终止决策路由 —— 严格优先级顺序
+
+    P1: 迭代次数硬上限 (绝对天花板)
+    P2: 读取 node_termination_eval 的计算结论 (优先复用，不复算)
+    P3: 独立综合评分回退 (原始行为的最后兜底)
+    """
+    max_iters = state.get("_max_iterations_", 200)
+    iteration = state.get("iteration", 0)
+
+    # === P1: 绝对天花板 ===
+    if iteration >= max_iters:
+        return "report_writing"
+
+    # === P2: 读取 TerminationEval 已经算好的结论 ===
+    term_result = state.get("_termination_result")
+    if term_result:
+        should_term = term_result.get("should_terminate", False)
+        logger.info(
+            f"[RouteAfterTerm] Taking TerminationEval verdict "
+            f"(should_terminate={should_term}): {term_result.get('stop_reason', '?')}"
+        )
+        if should_term:
+            return "report_writing"
+        return "hypothesis_generation"
+
+    # === P3: 回退到原始独立计算 ===
     convergence = state.get("convergence_score", 0.0)
-    evidence_str = sum(e.get("strength", 0.5) for e in state.get("evidence_chains", [])) / max(len(state.get("evidence_chains", [])), 1)
+    evidence_chains = state.get("evidence_chains", [])
     exploration_done = state.get("exploration_exhausted", False)
+    evidence_str = sum(e.get("strength", 0.5) for e in evidence_chains) / max(len(evidence_chains), 1)
     combined = convergence * 0.4 + evidence_str * 0.3 + (0.8 if exploration_done else 0.0) * 0.3
 
     if combined >= 0.85:

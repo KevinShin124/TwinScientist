@@ -56,7 +56,7 @@ class StateCheckpoint:
 def serialize_state_for_export(state: dict) -> dict:
     """导出时清理 LangGraph 内部字段，生成干净的 JSON"""
     clean = {}
-    skip_keys = {"_max_iterations_", "_termination_result"}
+    skip_keys = {"_max_iterations_", "_termination_result", "__decision"}
     for k, v in state.items():
         if k.startswith("_") or k.startswith("__"):
             continue

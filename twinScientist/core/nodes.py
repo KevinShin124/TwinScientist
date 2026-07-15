@@ -1328,10 +1328,11 @@ async def node_termination_eval(state: AgentState) -> dict:
             )
             logger.info(f"[TerminationEval] CONVERGENCE_STABLE: {stop_reason}")
 
-    # Condition B: Hard limit — max 200 rounds
-    if iteration >= 200:
+    # Condition B: Hard limit — use configured max_iterations (not hardcoded 200)
+    max_iters = state.get("_max_iterations_", 200)
+    if iteration >= max_iters:
         should_terminate = True
-        stop_reason = f"已达到最大轮次上限 (200/200)"
+        stop_reason = f"已达到最大轮次上限 ({max_iters}/{max_iters})"
         logger.info(f"[TerminationEval] MAX_ROUNDS_REACHED: {stop_reason}")
 
     # Condition C: Original combined score threshold
@@ -1373,7 +1374,7 @@ async def node_termination_eval(state: AgentState) -> dict:
         "hypothesis_tree": kept_tree if not should_terminate else tree,
     }
 
-    return {"_termination_result": result}
+    return {"_termination_result": result, "__decision": "TERMINATE" if should_terminate else "CONTINUE"}
 
 
 # ============================================================
@@ -1398,6 +1399,7 @@ async def node_report_writing(state: AgentState) -> dict:
 
     convergence_val = state.get("convergence_score", 0.0) * 100
     iteration_val = state.get("iteration", 0)
+    max_iter = min(state.get("_max_iterations_", 200), 200)
 
     # --- Programmatic sections (no LLM hallucination possible) ---
     active_hyp_count = len([h for h in hypotheses if h.get('status') != 'pruned'])
@@ -1760,7 +1762,7 @@ async def node_report_writing(state: AgentState) -> dict:
     parts.append("")
     parts.append("*本报告由 twinScientist AI Scientist 系统自动生成*")
     parts.append("*生成时间: 当前UTC时间*")
-    parts.append(f"*迭代轮次: {iteration_val}/5 | 收敛度: {convergence_val:.0f}%*")
+    parts.append(f"*迭代轮次: {iteration_val}/{max_iter} | 收敛度: {convergence_val:.0f}%*")
     parts.append("*Agent: Qwen系列 (阿里云百炼平台) | 编排: LangGraph*")
 
     report = NL.join(parts)
@@ -1784,9 +1786,9 @@ async def node_report_writing(state: AgentState) -> dict:
     report = NL.join(parts)
 
     # Also inject into the metadata footer area
-    footer_marker = f"*迭代轮次: {iteration_val}/5 | 收敛度: {convergence_val:.0f}%*"
+    footer_marker = f"*迭代轮次: {iteration_val}/{max_iter} | 收敛度: {convergence_val:.0f}%*"
     status_footer = f"| 迭代状态: {'✅ 已执行{iteration_val}轮' if iteration_val >= 1 else '⚠️ 未执行'}*"
-    report = report.replace(footer_marker, f"*迭代轮次: {iteration_val}/5 收敛度: {convergence_val:.0f}%{status_footer}")
+    report = report.replace(footer_marker, f"*迭代轮次: {iteration_val}/{max_iter} 收敛度: {convergence_val:.0f}%{status_footer}")
 
     logger.info("[ReportWriting] Report generated successfully with real data")
     logger.info(f"[ReportWriting] Final report length={len(report)}, Section 9 present={('以下基于真实数据分析' in report) or ('理论可行性验证框架' in report)}")
