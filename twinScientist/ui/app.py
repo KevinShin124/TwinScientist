@@ -29,6 +29,7 @@ class TwinScientistUI:
         research_question: str,
         max_iterations: int,
         auto_approve: bool,
+        **kwargs,
     ):
         """启动研究循环并返回流式输出"""
         initial_state = {
@@ -37,9 +38,15 @@ class TwinScientistUI:
             "_max_iterations_": max_iterations,
             "auto_confirm": auto_approve,
         }
+        # LangGraph recursion_limit is overridden to 2000 (200 iterations × ~10 steps/iter)
+        recursion_limit = max(200, max_iterations * 10)
 
         if self.agent_app:
-            async for event in self.agent_app.astream(initial_state, stream_mode="updates"):
+            async for event in self.agent_app.astream(
+                initial_state,
+                stream_mode="updates",
+                config={"configurable": {"recursion_limit": recursion_limit}},
+            ):
                 # Convert internal events to human-readable log lines
                 if isinstance(event, dict):
                     yield f"[{list(event.keys())[0]}] {json.dumps(event[list(event.keys())[0]], ensure_ascii=False, indent=2)}\n"
@@ -69,7 +76,7 @@ class TwinScientistUI:
                         lines=3,
                     )
                     max_iter_slider = gr.Slider(
-                        minimum=3, maximum=30, value=10, step=1,
+                        minimum=3, maximum=200, value=10, step=1,
                         label="最大迭代次数",
                     )
                     auto_approve_cb = gr.Checkbox(

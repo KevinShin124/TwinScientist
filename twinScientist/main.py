@@ -63,9 +63,11 @@ async def run_research(question: str, domain: str, max_iter: int):
     try:
         thread_id = f"cli-session-{uuid.uuid4().hex[:8]}"
         logger.info(f"[CLI] Starting fresh session with thread_id={thread_id}")
+        # LangGraph recursion_limit is overridden to 2000 (200 iterations × ~8 steps/iter)
+        # Each iteration takes ~8 node steps, so use 200 * 10 as safety margin
         result = await cognitive_graph.ainvoke(
             initial_state,
-            {"configurable": {"thread_id": thread_id}},
+            {"configurable": {"thread_id": thread_id}, "recursion_limit": 2000},
         )
 
         # Generate report — prefer final_report from graph (already has real data), else regenerate
@@ -133,7 +135,7 @@ def interactive_mode():
         # Research question mode
         question = raw
         domain = input("学科领域 [默认: 环境—人体关联]: ").strip() or "环境—人体关联"
-        max_iter = int(input("最大迭代次数 [默认: 5]: ") or "5")
+        max_iter = int(input("最大迭代次数 [默认: 200]: ") or "200")
 
         print()
         try:
@@ -157,7 +159,7 @@ def main():
     parser = argparse.ArgumentParser(description="twinScientist — AI Scientist CLI")
     parser.add_argument("--question", "-q", type=str, help="研究问题")
     parser.add_argument("--domain", "-d", type=str, help="学科领域")
-    parser.add_argument("--iterations", "-i", type=int, default=5, help="最大迭代次数（最多5轮）")
+    parser.add_argument("--iterations", "-i", type=int, default=5, help="最大迭代次数（最多200轮）")
     parser.add_argument("--ui", action="store_true", help="启动 Gradio Web UI")
 
     args = parser.parse_args()

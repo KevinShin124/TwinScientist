@@ -1258,7 +1258,7 @@ async def node_termination_eval(state: AgentState) -> dict:
 
     终止条件：
         1. convergence ≥ 85% 且连续 2 轮保持不变 → 停止
-        2. 达到最大轮次 (5 轮)                    → 停止
+        2. 达到最大轮次 (200 轮)                    → 停止
         3. 原始三路评分组合 ≥ 0.85                → 停止
     """
     evidence_chains = state.get("evidence_chains", [])
@@ -1328,10 +1328,10 @@ async def node_termination_eval(state: AgentState) -> dict:
             )
             logger.info(f"[TerminationEval] CONVERGENCE_STABLE: {stop_reason}")
 
-    # Condition B: Hard limit — max 5 rounds
-    if iteration >= 5:
+    # Condition B: Hard limit — max 200 rounds
+    if iteration >= 200:
         should_terminate = True
-        stop_reason = f"已达到最大轮次上限 (5/5)"
+        stop_reason = f"已达到最大轮次上限 (200/200)"
         logger.info(f"[TerminationEval] MAX_ROUNDS_REACHED: {stop_reason}")
 
     # Condition C: Original combined score threshold

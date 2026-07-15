@@ -74,13 +74,13 @@ def _check_orchestrator_stop_conditions(state: AgentState) -> dict:
     }
 
     iteration = state.get("iteration", 0)
-    max_iterations = min(state.get("_max_iterations_", 5), 5)  # 5轮硬上限
+    max_iterations = min(state.get("_max_iterations_", 200), 200)  # 200轮硬上限
 
-    # --- Condition 1: 检查当前轮次是否达到最大轮次（5轮）---
+    # --- Condition 1: 检查当前轮次是否达到最大轮次（200轮）---
     if iteration >= max_iterations:
         result["max_round_reached"] = True
         result["stop"] = True
-        result["reason"] = f"已达到最大轮次上限 ({max_iterations}/5)"
+        result["reason"] = f"已达到最大轮次上限 ({max_iterations}/{max_iterations})"
         logger.info(f"[OrchestratorStop] MAX_ROUNDS_REACHED: {result['reason']}")
         return result
 
@@ -253,7 +253,7 @@ def evaluate_state(state: AgentState) -> dict:
 
     # --- Iteration Context ---
     iteration = state.get("iteration", 0)
-    max_iter = min(state.get("_max_iterations_", 5), 5)  # 5轮硬上限
+    max_iter = min(state.get("_max_iterations_", 200), 200)  # 200轮硬上限
     consecutive_failures = state.get("consecutive_failures", 0)
     convergence = state.get("convergence_score", 0.0)
 
@@ -328,8 +328,8 @@ DECISION_PROMPT_TEMPLATE = """## 任务：科研编排决策
 
 你是 twinScientist 系统的 Orchestrator。根据以下状态诊断，选择**最合适的一个**认知节点继续推进。
 
-**⚠️ 多轮循环硬约束（最多 5 轮）：**
-- 当前轮次超过 5 轮时，必须终止并进入 report_writing
+**⚠️ 多轮循环硬约束（最多 200 轮）：**
+- 当前轮次超过 200 轮时，必须终止并进入 report_writing
 - 每一轮结束后都必须回答：①本轮实验有哪些漏洞或局限？②如果修正这些漏洞，假设应该怎么改？③修正后的假设是否值得再验证一次？
 
 {state_diagnosis}
@@ -348,7 +348,7 @@ DECISION_PROMPT_TEMPLATE = """## 任务：科研编排决策
 6. **每个假设都应该被验证**：不要跳过 experiment_design 直接进入 report_writing
 7. **禁止无效循环**：如果连续生成→评审→拒绝→重新生成的循环超过 3 轮，换策略（改变搜索方向或缩小范围）
 8. **禁止重复执行**：`last_executed_action` 是上一步刚执行完的节点，不要再次选择它（termination_eval 除外）
-9. **五轮强制上限**：无论研究进展如何，第 5 轮结束后必须终止
+9. **二百轮上限**：无论研究进展如何，第 200 轮结束后必须终止
 
 ## 输出格式（严格遵守）
 ```
@@ -420,7 +420,7 @@ def _deterministic_fallback(state: AgentState) -> str:
     if status_counts.get("needs_revision", 0) > 0:
         return "reflection"
 
-    if state.get("iteration", 0) >= 5:  # 5轮硬上限
+    if state.get("iteration", 0) >= 200:  # 200轮硬上限
         return "termination_eval"
 
     return "hypothesis_generation"
@@ -476,7 +476,7 @@ def route_after_reviewer(state: AgentState) -> str:
 
 def route_after_reflection(state: AgentState) -> str:
     """反思后：检查预算，决定再生成还是终止"""
-    if state.get("iteration", 0) >= 5 or state.get("consecutive_failures", 0) >= 3:  # 5轮硬上限
+    if state.get("iteration", 0) >= 200 or state.get("consecutive_failures", 0) >= 3:  # 200轮硬上限
         return "terminating"
     return "hypothesis_generation"
 

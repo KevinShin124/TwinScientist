@@ -217,9 +217,14 @@ def build_cognitive_graph() -> "CompiledGraph":
     )
 
     # Reflection → back to hypothesis_generation (for revision loop)
+    def _route_reflection(state: AgentState) -> str:
+        """Reflection → hypothesis_generation 或终止"""
+        max_iter = min(state.get("_max_iterations_", 200), 200)
+        return "terminating" if state.get("iteration", 0) >= max_iter or state.get("consecutive_failures", 0) >= 3 else "hypothesis_generation"
+
     workflow.add_conditional_edges(
         "reflection",
-        lambda s: "terminating" if s.get("iteration", 0) >= 5 or s.get("consecutive_failures", 0) >= 3 else "hypothesis_generation",
+        _route_reflection,
         {
             "hypothesis_generation": "hypothesis_generation",
             "terminating": "termination_eval",
