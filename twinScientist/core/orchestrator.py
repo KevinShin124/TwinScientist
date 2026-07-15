@@ -420,7 +420,9 @@ def _deterministic_fallback(state: AgentState) -> str:
     if status_counts.get("needs_revision", 0) > 0:
         return "reflection"
 
-    if state.get("iteration", 0) >= 200:  # 200轮硬上限
+    max_iter = min(state.get("_max_iterations_", 200), 200)
+    iteration = state.get("iteration", 0)
+    if iteration >= max_iter:  # 迭代次数硬上限
         return "termination_eval"
 
     return "hypothesis_generation"
@@ -476,7 +478,9 @@ def route_after_reviewer(state: AgentState) -> str:
 
 def route_after_reflection(state: AgentState) -> str:
     """反思后：检查预算，决定再生成还是终止"""
-    if state.get("iteration", 0) >= 200 or state.get("consecutive_failures", 0) >= 3:  # 200轮硬上限
+    max_iter = min(state.get("_max_iterations_", 200), 200)
+    iteration = state.get("iteration", 0)
+    if iteration >= max_iter or state.get("consecutive_failures", 0) >= 3:
         return "terminating"
     return "hypothesis_generation"
 
