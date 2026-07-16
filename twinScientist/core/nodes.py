@@ -446,6 +446,21 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
 
     already_hyp_count = len(state.get("hypothesis_tree", []))
 
+    # === Hard guardrail: force termination before wasting LLM calls ===
+    max_iters = min(state.get("_max_iterations_", 200), 200)
+    current_iter = state.get("iteration", 0)
+    if current_iter >= max_iters:
+        logger.warning(
+            f"[HypothesisGen] MAX_ITERATIONS REACHED ({current_iter}>={max_iters}), "
+            f"skipping generation to prevent infinite loop"
+        )
+        return {
+            "hypothesis_tree": state.get("hypothesis_tree", []),
+            "iteration": current_iter,          # ← Preserve iteration
+            "_max_iterations_": max_iters,      # ← Preserve max_iter
+            "consecutive_failures": state.get("consecutive_failures", 0),  # ← Don't reset failures
+        }
+
     # Get reflection insights if available
     anomalies = state.get("anomaly_graph", [])
     last_insight = anomalies[-1] if anomalies else {}
@@ -523,12 +538,17 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
         else:
             kept_tree.append(h)
 
+    # Preserve failure count — only reset on actual successful generation, don't hardcode 0
+    prev_failures = state.get("consecutive_failures", 0)
+
     logger.info(f"[HypothesisGen] Tree now has {len(kept_tree)} hypotheses (removed {pruned_count} pruned)")
 
     return {
         "hypothesis_tree": kept_tree,
-        "consecutive_failures": 0,
+        "consecutive_failures": prev_failures,
         "_generation_success": True,
+        "_max_iterations_": min(state.get("_max_iterations_", 200), 200),
+        "iteration": state.get("iteration", 0),
     }
 
 
@@ -540,18 +560,26 @@ async def node_tournament_eval(state: AgentState) -> dict:
     """
     【假设淘汰赛】从 N 个候选假设中两两比较，最终选出 1 个最优假设。
 
-    - 每轮两两配对比较（奇数个则随机轮空）
-    - 四个维度：逻辑严密性、文献/数据支撑、验证价值、可检验性
-    - 记录每个假设被淘汰的轮次、对手和原因
-    - 返回获胜假设（status 设为 active）+ 全部淘汰记录
+    FIX: 在每条退出路径上都必须显式传递 _max_iterations_, iteration,
+         consecutive_failures，防止 LangGraph state merge 吞掉这些控制字段。
     """
+    # Guard keys — always carry these forward regardless of branch
+    max_iters = min(state.get("_max_iterations_", 200), 200)
+    curr_iter = state.get("iteration", 0)
+    prev_failures = state.get("consecutive_failures", 0)
+
     hypotheses = copy.deepcopy([dict(h) for h in state.get("hypothesis_tree", [])])
     if len(hypotheses) <= 1:
         # 无需比较，直接标记为 active
         for h in hypotheses:
             if h.get("status") == "proposed":
                 h["status"] = "active"
-        return {"hypothesis_tree": hypotheses}
+        return {
+            "hypothesis_tree": hypotheses,
+            "_max_iterations_": max_iters,
+            "iteration": curr_iter,
+            "consecutive_failures": prev_failures,
+        }
 
     llm = _get_llm()
 
@@ -634,6 +662,9 @@ async def node_tournament_eval(state: AgentState) -> dict:
             h["status"] = "refuted_in_tournament"
             elim_count += 1
 
+    # Preserve failure count — only increment on actual failures, don't blindly reset
+    prev_failures = state.get("consecutive_failures", 0)
+
     logger.info(
         f"[TournamentEval] Winner={winner_id}, statement_len={len(winner_statement)}, "
         f"eliminated {elim_count} proposals, recorded {len(elim_records)} elimination records"
@@ -644,7 +675,7 @@ async def node_tournament_eval(state: AgentState) -> dict:
         "elimination_records": elim_records,
         "prev_round_winner_id": winner_id,
         "prev_round_winner_statement": winner_statement,
-        "consecutive_failures": 0,
+        "consecutive_failures": prev_failures,   # ← FIX: preserve instead of resetting to 0
     }
 
 async def node_experiment_design(state: AgentState) -> dict:
@@ -657,7 +688,15 @@ async def node_experiment_design(state: AgentState) -> dict:
     active_hyps = [h for h in hypotheses if h.get("status") in ("active", "proposed", "approved_by_reviewer")]
 
     if not active_hyps:
-        return {}
+        # === Guardrail: always carry control fields to prevent LangGraph merge corruption ===
+        max_iters = min(state.get("_max_iterations_", 200), 200)
+        curr_iter = state.get("iteration", 0)
+        prev_fails = state.get("consecutive_failures", 0)
+        return {
+            "_max_iterations_": max_iters,
+            "iteration": curr_iter,
+            "consecutive_failures": prev_fails,
+        }
 
     hyp = active_hyps[0]
 
@@ -919,13 +958,23 @@ async def node_interpretation(state: AgentState) -> dict:
     experiments = list(state.get("experiment_records", []))
     evidence_chains = list(state.get("evidence_chains", []))
 
-    # Guard against empty lists on first run
+    # Guard against empty lists on first run — always carry control fields
     if not experiments:
         logger.info("[Interpretation] No experiments yet — returning early with no change.")
-        return {"convergence_score": 0.0}
+        return {
+            "convergence_score": 0.0,
+            "_max_iterations_": min(state.get("_max_iterations_", 200), 200),
+            "iteration": state.get("iteration", 0),
+            "consecutive_failures": state.get("consecutive_failures", 0),
+        }
     if not evidence_chains:
         logger.info("[Interpretation] No evidence chains yet — returning early.")
-        return {"convergence_score": 0.0}
+        return {
+            "convergence_score": 0.0,
+            "_max_iterations_": min(state.get("_max_iterations_", 200), 200),
+            "iteration": state.get("iteration", 0),
+            "consecutive_failures": state.get("consecutive_failures", 0),
+        }
 
     latest_results = experiments[-1].get("results", {})
     latest_evidence = evidence_chains[-1]
@@ -1019,7 +1068,16 @@ async def node_reviewer_agent(state: AgentState) -> dict:
     hypotheses = state.get("hypothesis_tree", [])
     active = [h for h in hypotheses if h.get("status") in ("active", "proposed")]
     if not active:
-        return {"next_step": "reflection"}
+        # Carry termination-critical keys on ALL branches — prevent LangGraph merge corruption
+        max_iters = min(state.get("_max_iterations_", 200), 200)
+        curr_iter = state.get("iteration", 0)
+        prev_fails = state.get("consecutive_failures", 0)
+        return {
+            "next_step": "reflection",
+            "_max_iterations_": max_iters,
+            "iteration": curr_iter,
+            "consecutive_failures": prev_fails,
+        }
 
     latest_hyp = active[-1]
     reviews = copy.deepcopy(list(state.get("review_records", [])))
