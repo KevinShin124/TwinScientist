@@ -68,7 +68,7 @@ def _parse_daltons_records(
                     except (ValueError, TypeError):
                         pass
     else:
-        # Default / processed / raw: first valid column is the sensor value
+        # Default / processed / raw: extract ALL sensor columns (not just the first)
         for row in records:
             ts_raw = row.get('ts') or row.get('timestamp') or row.get('date_time', '')
             for key, val in row.items():
@@ -83,7 +83,6 @@ def _parse_daltons_records(
                             "pollutant_name": key,
                             "reading": f"{key}={numeric_val}",
                         })
-                        break  # One reading per record
                 except (ValueError, TypeError):
                     pass
 
