@@ -11,3 +11,7 @@ output/scientific_hypothesis_report.md
 # Runtime databases
 data/*.db
 *.db
+
+# Temporary patches
+*_patch.py
+fix_report.py
