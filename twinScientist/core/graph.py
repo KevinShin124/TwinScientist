@@ -11,6 +11,7 @@ Layer 2: Cognitive Graph — LLM驱动的科研编排系统
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from langgraph.graph import StateGraph, END
@@ -41,6 +42,7 @@ from core.orchestrator import (
     route_after_analysis,
     route_after_reflection,
     route_after_termination,
+    _mc_log_and_recommend,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,24 +53,40 @@ def _after_reviewer_route(state: AgentState) -> str:
     After reviewer_agent finishes, delegate to the orchestrator stop-check.
 
     Routing logic:
+      0) Minimum rounds guardrail — force at least min_rounds (default 2) of
+         iteration before ANY early termination. Prevents single-pass false positives.
       1) Max rounds reached → termination_eval
-      2) Evidence >0.85 AND score >80 → report_writing (conclusion clear)
+      2) Evidence >0.85 AND score >85 AND rounds>=min_rounds → report_writing (conclusion clear)
       3) Hypothesis similarity >0.95 → termination_eval (converged)
       4) Otherwise → reflection (continue next round)
     """
+    # === Guardrail: minimum rounds before any termination ===
+    min_rounds = int(os.getenv("MIN_REFLECTION_ROUNDS", "2"))
+    current_iter = state.get("iteration", 0)
+    if current_iter < min_rounds:
+        logger.info(
+            f"[AfterReviewer] MIN_ROUNDS NOT MET: iteration={current_iter}<{min_rounds}, "
+            f"forcing reflection instead of stopping"
+        )
+        return "reflection"
+
     checks = _check_orchestrator_stop_conditions(state)
 
     if checks["stop"]:
         if checks["max_round_reached"] or checks["converged"]:
             logger.info(f"[AfterReviewer] ORCHESTRATOR STOPPED (terminate): {checks['reason']}")
-            return "termination_eval"
+            action = "termination_eval"
         else:
-            # Evidence strong — skip reflection, go straight to report writing
-            logger.info(f"[AfterReviewer] EVIDENCE_STRONG: {checks['reason']}")
-            return "report_writing"
+            # Evidence strong AND passed min rounds — proceed to report writing
+            logger.info(f"[AfterReviewer] EVIDENCE_STRONG (after {min_rounds}+ rounds): {checks['reason']}")
+            action = "report_writing"
+    else:
+        logger.info(f"[AfterReviewer] CONTINUE: {checks['reason']}")
+        action = "reflection"
 
-    logger.info(f"[AfterReviewer] CONTINUE: {checks['reason']}")
-    return "reflection"
+    # Log this routing decision to MC experience store
+    _mc_log_and_recommend(state, action)
+    return action
 
 
 def build_cognitive_graph() -> "CompiledGraph":
@@ -218,9 +236,14 @@ def build_cognitive_graph() -> "CompiledGraph":
 
     # Reflection → back to hypothesis_generation (for revision loop)
     def _route_reflection(state: AgentState) -> str:
-        """Reflection → hypothesis_generation 或终止"""
-        max_iter = min(state.get("_max_iterations_", 200), 200)
-        return "terminating" if state.get("iteration", 0) >= max_iter or state.get("consecutive_failures", 0) >= 3 else "hypothesis_generation"
+        """Reflection → hypothesis_generation 或终止 + MC 日志"""
+        max_iter = state.get("_max_iterations_", 200)
+        if state.get("iteration", 0) >= max_iter or state.get("consecutive_failures", 0) >= 3:
+            action = "terminating"
+        else:
+            action = "hypothesis_generation"
+        _mc_log_and_recommend(state, action)
+        return action
 
     workflow.add_conditional_edges(
         "reflection",

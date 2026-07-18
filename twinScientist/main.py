@@ -15,6 +15,20 @@ import io
 import uuid
 from pathlib import Path
 
+# Experience Store — lightweight Monte-Carlo RL logging (best-effort, never crashes)
+try:
+    from core.experience import exp_store
+    _EXPERIENCE_AVAILABLE = True
+except Exception:
+    _EXPERIENCE_AVAILABLE = False
+
+# Monte Carlo Policy — reinforcement learning for orchestrator routing
+try:
+    from core.mc_learning import mc_policy
+    _MC_POLICY_AVAILABLE = True
+except Exception:
+    _MC_POLICY_AVAILABLE = False
+
 # Fix Windows console encoding for Unicode output
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -40,16 +54,37 @@ logger = logging.getLogger("twinScientist")
 
 
 async def run_research(question: str, domain: str, max_iter: int):
-    """CLI 模式：运行研究循环"""
+    """CLI 模式：运行研究循环（含蒙特卡洛 RL 生命周期管理）"""
     from config.settings import settings
     from core.graph import cognitive_graph
     from output.report_generator import ReportGenerator
 
+    domain = domain or "环境—人体关联"
     settings.max_iterations = max_iter
+
+    # --- Begin experience tracking for this research session ---
+    _sid = None
+    if _EXPERIENCE_AVAILABLE:
+        try:
+            _sid = exp_store.begin_session(domain=domain, query=question)
+            if _sid:
+                logger.info(f"[ExpStore] Session #{_sid} started for '{question[:60]}...'")
+        except Exception:
+            pass  # best-effort, never crash
+
+    # --- Begin MC RL episode ---
+    _mc_eid = None
+    if _MC_POLICY_AVAILABLE:
+        try:
+            _mc_eid = mc_policy.begin_episode(domain=domain, query=question)
+            if _mc_eid:
+                logger.info(f"[MCPolicy] Episode #{_mc_eid} started")
+        except Exception:
+            pass  # best-effort, never crash
 
     initial_state = {
         "query": question,
-        "domain": domain or "环境—人体关联",
+        "domain": domain,
         "_max_iterations_": max_iter,
         "auto_confirm": True,  # CLI defaults to auto-confirm
     }
@@ -58,8 +93,14 @@ async def run_research(question: str, domain: str, max_iter: int):
     print("  [twinScientist] AI Scientist")
     print(f"  领域: {initial_state['domain']}")
     print(f"  问题: {question}")
+    if _MC_POLICY_AVAILABLE:
+        stats = mc_policy.get_learning_stats()
+        if stats.get("total_episodes", 0) > 0:
+            print(f"  MC策略: {stats['total_episodes']} 个历史 episode, "
+                  f"Q表大小={stats['q_table_size']}, ε={stats['epsilon']}")
     print("=" * 70)
 
+    result = None
     try:
         thread_id = f"cli-session-{uuid.uuid4().hex[:8]}"
         logger.info(f"[CLI] Starting fresh session with thread_id={thread_id}")
@@ -95,6 +136,28 @@ async def run_research(question: str, domain: str, max_iter: int):
     except Exception as e:
         logger.error(f"Research failed: {e}", exc_info=True)
         raise
+
+    finally:
+        # --- Flush experience store for this session (best-effort) ---
+        if _sid and _EXPERIENCE_AVAILABLE:
+            try:
+                exp_store.flush_session()
+                logger.info(f"[ExpStore] Session #{_sid} flushed")
+            except Exception as e:
+                logger.warning(f"[ExpStore] Flush failed: {e}")
+
+        # --- Update MC RL policy from this episode (best-effort) ---
+        if _mc_eid and _MC_POLICY_AVAILABLE:
+            try:
+                mc_policy.update_from_episode(final_state=result)
+                stats = mc_policy.get_learning_stats()
+                logger.info(
+                    f"[MCPolicy] Episode #{_mc_eid} updated. "
+                    f"Total episodes: {stats.get('total_episodes', 0)}, "
+                    f"Q-table size: {stats.get('q_table_size', 0)}"
+                )
+            except Exception as e:
+                logger.warning(f"[MCPolicy] Episode update failed: {e}")
 
 
 def interactive_mode():

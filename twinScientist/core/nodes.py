@@ -325,6 +325,7 @@ async def node_ethics_check(state: AgentState) -> dict:
         "ethics_status": "approved",
         "ethics_comment": reason or content[:200],
         "ethics_risk_level": risk_level or "LOW",
+        "current_action": "ethics_check",
     }
 
 
@@ -418,6 +419,7 @@ async def node_literature_review(state: AgentState) -> dict:
         "literature_summary": content,
         "fact_extraction": facts,
         "_literature_ready": True,
+        "current_action": "literature_review",
         "knowledge_graph": {
             "nodes": [{"id": n, "type": d.get("type", "unknown")}
                       for n, d in kg_raw.nodes(data=True)],
@@ -447,7 +449,7 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
     already_hyp_count = len(state.get("hypothesis_tree", []))
 
     # === Hard guardrail: force termination before wasting LLM calls ===
-    max_iters = min(state.get("_max_iterations_", 200), 200)
+    max_iters = state.get("_max_iterations_", 200)
     current_iter = state.get("iteration", 0)
     if current_iter >= max_iters:
         logger.warning(
@@ -459,6 +461,7 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
             "iteration": current_iter,          # ← Preserve iteration
             "_max_iterations_": max_iters,      # ← Preserve max_iter
             "consecutive_failures": state.get("consecutive_failures", 0),  # ← Don't reset failures
+            "current_action": "hypothesis_generation",
         }
 
     # Get reflection insights if available
@@ -547,8 +550,9 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
         "hypothesis_tree": kept_tree,
         "consecutive_failures": prev_failures,
         "_generation_success": True,
-        "_max_iterations_": min(state.get("_max_iterations_", 200), 200),
+        "_max_iterations_": state.get("_max_iterations_", 200),
         "iteration": state.get("iteration", 0),
+        "current_action": "hypothesis_generation",
     }
 
 
@@ -564,7 +568,7 @@ async def node_tournament_eval(state: AgentState) -> dict:
          consecutive_failures，防止 LangGraph state merge 吞掉这些控制字段。
     """
     # Guard keys — always carry these forward regardless of branch
-    max_iters = min(state.get("_max_iterations_", 200), 200)
+    max_iters = state.get("_max_iterations_", 200)
     curr_iter = state.get("iteration", 0)
     prev_failures = state.get("consecutive_failures", 0)
 
@@ -676,6 +680,7 @@ async def node_tournament_eval(state: AgentState) -> dict:
         "prev_round_winner_id": winner_id,
         "prev_round_winner_statement": winner_statement,
         "consecutive_failures": prev_failures,   # ← FIX: preserve instead of resetting to 0
+        "current_action": "tournament_eval",
     }
 
 async def node_experiment_design(state: AgentState) -> dict:
@@ -689,13 +694,14 @@ async def node_experiment_design(state: AgentState) -> dict:
 
     if not active_hyps:
         # === Guardrail: always carry control fields to prevent LangGraph merge corruption ===
-        max_iters = min(state.get("_max_iterations_", 200), 200)
+        max_iters = state.get("_max_iterations_", 200)
         curr_iter = state.get("iteration", 0)
         prev_fails = state.get("consecutive_failures", 0)
         return {
             "_max_iterations_": max_iters,
             "iteration": curr_iter,
             "consecutive_failures": prev_fails,
+            "current_action": "experiment_design",
         }
 
     hyp = active_hyps[0]
@@ -757,6 +763,7 @@ async def node_experiment_design(state: AgentState) -> dict:
     return {
         "experiment_records": experiments,
         "hypothesis_tree": tree,
+        "current_action": "experiment_design",
     }
 
 
@@ -942,6 +949,7 @@ async def node_data_analysis(state: AgentState) -> dict:
     return {
         "experiment_records": experiments,
         "evidence_chains": evidence_chains,
+        "current_action": "data_analysis",
     }
 
 
@@ -963,17 +971,19 @@ async def node_interpretation(state: AgentState) -> dict:
         logger.info("[Interpretation] No experiments yet — returning early with no change.")
         return {
             "convergence_score": 0.0,
-            "_max_iterations_": min(state.get("_max_iterations_", 200), 200),
+            "_max_iterations_": state.get("_max_iterations_", 200),
             "iteration": state.get("iteration", 0),
             "consecutive_failures": state.get("consecutive_failures", 0),
+            "current_action": "interpretation",
         }
     if not evidence_chains:
         logger.info("[Interpretation] No evidence chains yet — returning early.")
         return {
             "convergence_score": 0.0,
-            "_max_iterations_": min(state.get("_max_iterations_", 200), 200),
+            "_max_iterations_": state.get("_max_iterations_", 200),
             "iteration": state.get("iteration", 0),
             "consecutive_failures": state.get("consecutive_failures", 0),
+            "current_action": "interpretation",
         }
 
     latest_results = experiments[-1].get("results", {})
@@ -1053,7 +1063,7 @@ async def node_interpretation(state: AgentState) -> dict:
 
     logger.info(f"[Interpretation] Updated {len(result_hyps)} hypotheses, convergence_score={convergence_score:.3f}")
 
-    return {"hypothesis_tree": result_hyps, "convergence_score": round(convergence_score, 3)}
+    return {"hypothesis_tree": result_hyps, "convergence_score": round(convergence_score, 3), "current_action": "interpretation"}
 
 
 # ============================================================
@@ -1069,7 +1079,7 @@ async def node_reviewer_agent(state: AgentState) -> dict:
     active = [h for h in hypotheses if h.get("status") in ("active", "proposed")]
     if not active:
         # Carry termination-critical keys on ALL branches — prevent LangGraph merge corruption
-        max_iters = min(state.get("_max_iterations_", 200), 200)
+        max_iters = state.get("_max_iterations_", 200)
         curr_iter = state.get("iteration", 0)
         prev_fails = state.get("consecutive_failures", 0)
         return {
@@ -1077,6 +1087,7 @@ async def node_reviewer_agent(state: AgentState) -> dict:
             "_max_iterations_": max_iters,
             "iteration": curr_iter,
             "consecutive_failures": prev_fails,
+            "current_action": "reviewer_agent",
         }
 
     latest_hyp = active[-1]
@@ -1156,6 +1167,7 @@ async def node_reviewer_agent(state: AgentState) -> dict:
     return {
         "review_records": reviews,
         "hypothesis_tree": new_tree,
+        "current_action": "reviewer_agent",
     }
 
 
@@ -1295,6 +1307,7 @@ async def node_reflection(state: AgentState) -> dict:
         "anomaly_graph": anomaly_graph,
         "hypothesis_tree": kept_tree,
         "consecutive_failures": 0 if new_hyp else state.get("consecutive_failures", 0) + 1,
+        "current_action": "reflection",
     }
 
 
@@ -1432,7 +1445,7 @@ async def node_termination_eval(state: AgentState) -> dict:
         "hypothesis_tree": kept_tree if not should_terminate else tree,
     }
 
-    return {"_termination_result": result, "__decision": "TERMINATE" if should_terminate else "CONTINUE"}
+    return {"_termination_result": result, "__decision": "TERMINATE" if should_terminate else "CONTINUE", "current_action": "termination_eval"}
 
 
 # ============================================================
@@ -1457,7 +1470,7 @@ async def node_report_writing(state: AgentState) -> dict:
 
     convergence_val = state.get("convergence_score", 0.0) * 100
     iteration_val = state.get("iteration", 0)
-    max_iter = min(state.get("_max_iterations_", 200), 200)
+    max_iter = state.get("_max_iterations_", 200)
 
     # --- Programmatic sections (no LLM hallucination possible) ---
     active_hyp_count = len([h for h in hypotheses if h.get('status') != 'pruned'])
@@ -1851,7 +1864,7 @@ async def node_report_writing(state: AgentState) -> dict:
     logger.info("[ReportWriting] Report generated successfully with real data")
     logger.info(f"[ReportWriting] Final report length={len(report)}, Section 9 present={('以下基于真实数据分析' in report) or ('理论可行性验证框架' in report)}")
 
-    return {"final_report": report}
+    return {"final_report": report, "current_action": "report_writing"}
 
 
 
@@ -1889,13 +1902,13 @@ async def node_pi_agent_meeting(state: AgentState) -> dict:
     # If the original already contains real analysis (Section 9 with real data), preserve it
     if "以下基于真实数据分析" in original_content or "因果推断摘要" in original_content:
         logger.info("[PiAgent] Preserving original report with real causal inference data")
-        return {"_pi_summary_done": True}
+        return {"_pi_summary_done": True, "current_action": "pi_agent_meeting"}
     elif len(pi_content) > len(original_content) * 0.8 and pi_content != original_content:
         logger.info("[PiAgent] Using PI-generated report")
-        return {"final_report": pi_content, "_pi_summary_done": True}
+        return {"final_report": pi_content, "_pi_summary_done": True, "current_action": "pi_agent_meeting"}
     else:
         logger.info("[PiAgent] Original report preserved")
-        return {"_pi_summary_done": True}
+        return {"_pi_summary_done": True, "current_action": "pi_agent_meeting"}
 
 
 # ============================================================
@@ -1915,19 +1928,19 @@ async def node_human_approval(state: AgentState) -> dict:
 
     if auto_confirm:
         logger.info("[HumanApproval] Auto-confirm enabled — proceeding")
-        return {}
+        return {"current_action": "human_approval"}
 
     if user_feedback and user_feedback.strip().lower() in ("approve", "确认", "通过", "approved"):
         logger.info("[HumanApproval] User approved")
-        return {}
+        return {"current_action": "human_approval"}
 
     if user_feedback:
         logger.info(f"[HumanApproval] User provided feedback: {user_feedback[:100]}")
-        return {"user_feedback": user_feedback}
+        return {"user_feedback": user_feedback, "current_action": "human_approval"}
 
     # No input yet — this is an interrupt point
     logger.info("[HumanApproval] Waiting for human decision...")
-    return {"pending_approval": True}
+    return {"pending_approval": True, "current_action": "human_approval"}
 
 
 # ============================================================
@@ -1988,4 +2001,5 @@ async def node_evolution_manager(state: AgentState) -> dict:
 
     return {
         "_evolution_insights": evolution_record,
+        "current_action": "evolution_manager",
     }

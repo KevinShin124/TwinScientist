@@ -1,5 +1,5 @@
 """
-Layer 2: Orchestrator — LLM驱动的动态路由引擎
+Layer 2: Orchestrator — LLM驱动的动态路由引擎 + 蒙特卡洛强化学习
 
 替代硬编码Python if/else路由，让Qwen模型基于当前State上下文
 自主决策下一步认知操作。这是国际AI Scientist的主流模式（AI_Scientist, AutoDevin）。
@@ -9,6 +9,7 @@ Layer 2: Orchestrator — LLM驱动的动态路由引擎
   不确定性、异常图谱后做出全局最优决策
 - Conditionally Dynamic：某些确定性流程（ethics_check → literature_review）
   仍保持直接边；需要LLM判断的分支通过 new_orchestrator_router() 路由
+- Monte Carlo RL：基于历史研究会话学到的 Q(s,a) 策略，为 LLM 提供经验推荐
 """
 
 from __future__ import annotations
@@ -21,6 +22,13 @@ from core.state import AgentState
 from core.llm_client import QwenClient
 from config.settings import settings
 from core.prompts import ORCHESTRATOR_SYSTEM_PROMPT
+
+# Monte Carlo RL — best-effort import (never crashes)
+try:
+    from core.mc_learning import mc_policy, compute_step_reward
+    _MC_AVAILABLE = True
+except Exception:
+    _MC_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +59,70 @@ def _hypothesis_statement_similarity(stmt_a: str, stmt_b: str) -> float:
     return round(intersection / union, 4)
 
 
+# ============================================================
+# Monte Carlo RL Integration — 经验学习推荐注入
+# ============================================================
+
+def _mc_log_and_recommend(state: AgentState, chosen_action: str) -> str:
+    """
+    记录当前步骤到 MC 经验库，并获取下一步推荐。
+
+    在每个路由决策点调用：
+    1. 将 (current_state, chosen_action) 记录到 MC episode
+    2. 返回 MC 策略推荐文本（用于注入 LLM prompt）
+
+    Best-effort: 任何异常都会被静默捕获，不影响正常路由。
+    """
+    if not _MC_AVAILABLE:
+        return ""
+    try:
+        mc_policy.log_step(state, chosen_action)
+        recommendation = mc_policy.recommend(state)
+        return mc_policy.format_recommendation_for_prompt(recommendation)
+    except Exception as e:
+        logger.debug(f"[MC] log_and_recommend failed: {e}")
+        return ""
+
+
+def _mc_influence_route(state: AgentState, default_action: str, candidates: list[str]) -> str:
+    """
+    用 MC 策略影响确定性路由决策。
+
+    当 MC 策略有足够数据时，可能改变默认路由选择。
+    当数据不足时，返回默认动作。
+
+    Args:
+        state: 当前 AgentState
+        default_action: 确定性路由的默认选择
+        candidates: 所有可选的动作列表
+
+    Returns: 最终选择的动作
+    """
+    if not _MC_AVAILABLE:
+        return default_action
+
+    try:
+        recommendation = mc_policy.recommend(state)
+
+        if recommendation.get("method") == "no_data":
+            return default_action
+
+        mc_action = recommendation.get("recommended_action")
+        confidence = recommendation.get("confidence", 0.0)
+
+        # Only override if MC is confident AND the recommended action is a valid candidate
+        if confidence >= 0.8 and mc_action in candidates:
+            logger.info(
+                f"[MC] Overriding route: {default_action} → {mc_action} "
+                f"(confidence={confidence:.0%}, Q={recommendation.get('best_q_value', 0):.3f})"
+            )
+            return mc_action
+
+        return default_action
+    except Exception:
+        return default_action
+
+
 def _check_orchestrator_stop_conditions(state: AgentState) -> dict:
     """
     Orchestrator 每轮结束时的停止/继续决策检查。
@@ -74,7 +146,7 @@ def _check_orchestrator_stop_conditions(state: AgentState) -> dict:
     }
 
     iteration = state.get("iteration", 0)
-    max_iterations = min(state.get("_max_iterations_", 200), 200)  # 200轮硬上限
+    max_iterations = state.get("_max_iterations_", 200)  # Hard cap enforced by caller
 
     # --- Condition 1: 检查当前轮次是否达到最大轮次（200轮）---
     if iteration >= max_iterations:
@@ -253,7 +325,7 @@ def evaluate_state(state: AgentState) -> dict:
 
     # --- Iteration Context ---
     iteration = state.get("iteration", 0)
-    max_iter = min(state.get("_max_iterations_", 200), 200)  # 200轮硬上限
+    max_iter = state.get("_max_iterations_", 200)  # Hard cap enforced by caller
     consecutive_failures = state.get("consecutive_failures", 0)
     convergence = state.get("convergence_score", 0.0)
 
@@ -336,6 +408,8 @@ DECISION_PROMPT_TEMPLATE = """## 任务：科研编排决策
 
 **上一步刚执行的操作**: {last_executed_action}
 
+{mc_recommendation}
+
 ## 候选认知节点及其含义
 """ + "\n".join(f"- **{k}**: {v}" for k, v in AVAILABLE_ACTIONS.items()) + """
 
@@ -349,6 +423,7 @@ DECISION_PROMPT_TEMPLATE = """## 任务：科研编排决策
 7. **禁止无效循环**：如果连续生成→评审→拒绝→重新生成的循环超过 3 轮，换策略（改变搜索方向或缩小范围）
 8. **禁止重复执行**：`last_executed_action` 是上一步刚执行完的节点，不要再次选择它（termination_eval 除外）
 9. **二百轮上限**：无论研究进展如何，第 200 轮结束后必须终止
+10. **参考蒙特卡洛推荐**：如果有 MC 策略推荐，请参考其 Q-values 和置信度做出决策
 
 ## 输出格式（严格遵守）
 ```
@@ -361,13 +436,23 @@ reason: <简短理由，为什么这个行动最紧迫>
 
 async def llm_orchestrator_decision(state: AgentState) -> str:
     """
-    LLM驱动的动态路由核心函数。
+    LLM驱动的动态路由核心函数 + 蒙特卡洛策略推荐注入。
 
     调用 Qwen 模型基于当前 State 的诊断报告做出最优下一步决策。
+    同时将 MC 策略的历史学习推荐注入 prompt，供 LLM 参考。
     返回值是下一个认知节点的名称字符串。
     """
     ev = evaluate_state(state)
     diagnosis = format_eval_report(ev)
+
+    # --- Monte Carlo RL recommendation (best-effort) ---
+    mc_rec_text = ""
+    if _MC_AVAILABLE:
+        try:
+            mc_rec = mc_policy.recommend(state)
+            mc_rec_text = mc_policy.format_recommendation_for_prompt(mc_rec)
+        except Exception as e:
+            logger.debug(f"[Orchestrator] MC recommendation failed: {e}")
 
     llm = QwenClient(
         base_url=settings.bailian_base_url,
@@ -377,7 +462,11 @@ async def llm_orchestrator_decision(state: AgentState) -> str:
 
     messages = [
         {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
-        {"role": "user", "content": DECISION_PROMPT_TEMPLATE.format(state_diagnosis=diagnosis, last_executed_action=state.get("current_action", "none"))},
+        {"role": "user", "content": DECISION_PROMPT_TEMPLATE.format(
+            state_diagnosis=diagnosis,
+            last_executed_action=state.get("current_action", "none"),
+            mc_recommendation=mc_rec_text,
+        )},
     ]
 
     try:
@@ -390,11 +479,15 @@ async def llm_orchestrator_decision(state: AgentState) -> str:
             chosen_action = match.group(1).lower().strip()
             if chosen_action in AVAILABLE_ACTIONS:
                 logger.info(f"[Orchestrator] LLM chose: {chosen_action}")
+                # Log this step to MC experience store
+                _mc_log_and_recommend(state, chosen_action)
                 return chosen_action
 
         # Fallback to deterministic heuristic
         logger.warning(f"[Orchestrator] Failed to parse LLM decision: {content[:100]}")
-        return _deterministic_fallback(state)
+        fallback = _deterministic_fallback(state)
+        _mc_log_and_recommend(state, fallback)
+        return fallback
 
     except Exception as e:
         logger.error(f"[Orchestrator] LLM call failed: {e}")
@@ -420,7 +513,7 @@ def _deterministic_fallback(state: AgentState) -> str:
     if status_counts.get("needs_revision", 0) > 0:
         return "reflection"
 
-    max_iter = min(state.get("_max_iterations_", 200), 200)
+    max_iter = state.get("_max_iterations_", 200)
     iteration = state.get("iteration", 0)
     if iteration >= max_iter:  # 迭代次数硬上限
         return "termination_eval"
@@ -433,11 +526,14 @@ def _deterministic_fallback(state: AgentState) -> str:
 # ============================================================
 
 def route_after_literature(state: AgentState) -> str:
-    """文献完成后：确定性的过渡到假设生成阶段"""
+    """文献完成后：确定性的过渡到假设生成阶段 + MC 日志"""
     facts = state.get("fact_extraction", [])
     if not facts or len(facts) < 2:
-        return "literature_review"  # 继续补充
-    return "hypothesis_generation"
+        action = "literature_review"
+    else:
+        action = "hypothesis_generation"
+    _mc_log_and_recommend(state, action)
+    return action
 
 
 def route_after_hypothesis(state: AgentState) -> str:
@@ -465,40 +561,46 @@ def route_after_analysis(state: AgentState) -> str:
 
 
 def route_after_reviewer(state: AgentState) -> str:
-    """Reviewer后：低分回reflection，高分进报告"""
+    """Reviewer后：低分回reflection，高分进报告 + MC 日志"""
     reviews = state.get("review_records", [])
     if not reviews:
-        return "reflection"
-
-    latest = reviews[-1]
-    if latest.get("total_score", 0) >= 75:
-        return "report_writing"
-    return "reflection"
+        action = "reflection"
+    else:
+        latest = reviews[-1]
+        action = "report_writing" if latest.get("total_score", 0) >= 75 else "reflection"
+    _mc_log_and_recommend(state, action)
+    return action
 
 
 def route_after_reflection(state: AgentState) -> str:
-    """反思后：检查预算，决定再生成还是终止"""
-    max_iter = min(state.get("_max_iterations_", 200), 200)
+    """反思后：检查预算，决定再生成还是终止 + MC 日志"""
+    max_iter = state.get("_max_iterations_", 200)
     iteration = state.get("iteration", 0)
     if iteration >= max_iter or state.get("consecutive_failures", 0) >= 3:
-        return "terminating"
-    return "hypothesis_generation"
+        action = "terminating"
+    else:
+        action = "hypothesis_generation"
+    _mc_log_and_recommend(state, action)
+    return action
 
 
 def route_after_termination(state: AgentState) -> str:
     """
-    终止决策路由 —— 严格优先级顺序
+    终止决策路由 —— 严格优先级顺序 + MC 策略影响
 
     P1: 迭代次数硬上限 (绝对天花板)
     P2: 读取 node_termination_eval 的计算结论 (优先复用，不复算)
     P3: 独立综合评分回退 (原始行为的最后兜底)
+    MC: 在 P2/P3 分支中，用 MC 策略影响"继续 vs 终止"决策
     """
     max_iters = state.get("_max_iterations_", 200)
     iteration = state.get("iteration", 0)
 
     # === P1: 绝对天花板 ===
     if iteration >= max_iters:
-        return "report_writing"
+        action = "report_writing"
+        _mc_log_and_recommend(state, action)
+        return action
 
     # === P2: 读取 TerminationEval 已经算好的结论 ===
     term_result = state.get("_termination_result")
@@ -509,8 +611,15 @@ def route_after_termination(state: AgentState) -> str:
             f"(should_terminate={should_term}): {term_result.get('stop_reason', '?')}"
         )
         if should_term:
-            return "report_writing"
-        return "hypothesis_generation"
+            action = "report_writing"
+        else:
+            # MC influence: might override "continue" to "terminate" or vice versa
+            action = _mc_influence_route(
+                state, "hypothesis_generation",
+                ["hypothesis_generation", "report_writing", "termination_eval"]
+            )
+        _mc_log_and_recommend(state, action)
+        return action
 
     # === P3: 回退到原始独立计算 ===
     convergence = state.get("convergence_score", 0.0)
@@ -520,5 +629,8 @@ def route_after_termination(state: AgentState) -> str:
     combined = convergence * 0.4 + evidence_str * 0.3 + (0.8 if exploration_done else 0.0) * 0.3
 
     if combined >= 0.85:
-        return "report_writing"
-    return "hypothesis_generation"
+        action = "report_writing"
+    else:
+        action = "hypothesis_generation"
+    _mc_log_and_recommend(state, action)
+    return action
