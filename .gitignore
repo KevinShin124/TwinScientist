@@ -7,3 +7,7 @@ __pycache__/
 *.json
 *.txt
 output/scientific_hypothesis_report.md
+
+# Runtime databases
+data/*.db
+*.db
