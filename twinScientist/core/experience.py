@@ -100,7 +100,7 @@ class ExperienceStore:
     def conn(self) -> sqlite3.Connection:
         if self._conn is None:
             try:
-                self._conn = sqlite3.connect(str(self._db_path))
+                self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
                 self._conn.execute("PRAGMA journal_mode=WAL")
                 self._conn.executescript(SCHEMA_SQL)
                 logger.info(f"[ExpStore] Initialized experience DB at {self._db_path}")
@@ -187,6 +187,7 @@ class ExperienceStore:
                    VALUES (?, ?, ?, 0, 0, 0, '', '')""",
                 (domain, qh, time.time()),
             )
+            self.conn.commit()
             self._current_session_id = cursor.lastrowid
             self._pending_steps = []
             self._domain = domain
@@ -196,17 +197,32 @@ class ExperienceStore:
             return None
 
     def log_step(self, state: dict, action: str) -> bool:
-        """Record one routing decision. Called after every decision node."""
+        """Record one routing decision. Called after every decision node.
+        Each step is persisted incrementally to survive process interruptions."""
         if self._current_session_id is None:
             return False
         try:
             feat = self._feature_vector(state)
-            self._pending_steps.append({
+            step = {
                 "step_idx": len(self._pending_steps),
                 "ts": time.time(),
                 "feature_json": json.dumps(feat, ensure_ascii=False),
                 "action": action,
-            })
+            }
+            self._pending_steps.append(step)
+
+            # Incremental persistence — write step to DB immediately
+            try:
+                self.conn.execute(
+                    """INSERT OR REPLACE INTO steps (session_id, step_idx, ts, feature_json, action, cum_reward)
+                       VALUES (?, ?, ?, ?, ?, 0)""",
+                    (self._current_session_id, step["step_idx"], step["ts"],
+                     step["feature_json"], action),
+                )
+                self.conn.commit()
+            except Exception:
+                pass  # best-effort incremental write
+
             return True
         except Exception as e:
             logger.debug(f"[ExpStore] Step logging failed: {e}")

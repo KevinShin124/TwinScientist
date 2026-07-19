@@ -430,7 +430,7 @@ class MonteCarloPolicy:
     def conn(self) -> sqlite3.Connection:
         if self._conn is None:
             try:
-                self._conn = sqlite3.connect(str(self._db_path))
+                self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
                 self._conn.execute("PRAGMA journal_mode=WAL")
                 self._conn.executescript(MC_SCHEMA_SQL)
                 logger.info(f"[MCPolicy] Initialized MC DB at {self._db_path}")
@@ -455,6 +455,7 @@ class MonteCarloPolicy:
                    VALUES (?, ?, 'active')""",
                 (domain, time.time()),
             )
+            self.conn.commit()
             self._current_episode_id = cursor.lastrowid
             self._pending_steps = []
             self._domain = domain
@@ -470,22 +471,41 @@ class MonteCarloPolicy:
 
         应在每个认知节点执行完毕后、路由决策做出前调用。
         action 参数是**即将选择的下一个动作**，不是刚执行完的节点。
+
+        每一步都立即持久化到 SQLite，防止进程中断导致数据丢失。
         """
         if self._current_episode_id is None:
+            logger.warning("[MCPolicy] log_step skipped: no active episode")
             return False
         try:
             state_key = extract_state_key(state)
             features = extract_feature_vector(state)
             reward = compute_step_reward(state, action)
 
-            self._pending_steps.append({
+            step = {
                 "step_idx": len(self._pending_steps),
                 "state_key": state_key,
                 "action": action,
                 "reward": reward,
                 "feature_json": json.dumps(features, ensure_ascii=False),
                 "ts": time.time(),
-            })
+            }
+            self._pending_steps.append(step)
+
+            # Incremental persistence — write step to DB immediately
+            try:
+                self.conn.execute(
+                    """INSERT OR REPLACE INTO mc_steps
+                       (episode_id, step_idx, state_key, action, reward, mc_return, feature_json, ts)
+                       VALUES (?, ?, ?, ?, ?, 0, ?, ?)""",
+                    (self._current_episode_id, step["step_idx"], state_key,
+                     action, reward, step["feature_json"], step["ts"]),
+                )
+                self.conn.commit()
+                logger.info(f"[MCPolicy] Step {step['step_idx']} persisted: {action}")
+            except Exception as e:
+                logger.warning(f"[MCPolicy] Incremental write failed: {e}")
+
             return True
         except Exception as e:
             logger.debug(f"[MCPolicy] Step logging failed: {e}")

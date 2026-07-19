@@ -9,6 +9,7 @@ Usage:
 
 import asyncio
 import argparse
+import atexit
 import logging
 import sys
 import io
@@ -28,6 +29,23 @@ try:
     _MC_POLICY_AVAILABLE = True
 except Exception:
     _MC_POLICY_AVAILABLE = False
+
+
+# ---- atexit safety net: flush RL data even if process is interrupted ----
+def _emergency_flush():
+    """Best-effort flush on any exit path (including SIGTERM)."""
+    try:
+        if _EXPERIENCE_AVAILABLE and exp_store._current_session_id is not None:
+            exp_store.flush_session()
+    except Exception:
+        pass
+    try:
+        if _MC_POLICY_AVAILABLE and mc_policy._current_episode_id is not None:
+            mc_policy.update_from_episode()
+    except Exception:
+        pass
+
+atexit.register(_emergency_flush)
 
 # Fix Windows console encoding for Unicode output
 if sys.platform == "win32":

@@ -68,6 +68,7 @@ def _after_reviewer_route(state: AgentState) -> str:
             f"[AfterReviewer] MIN_ROUNDS NOT MET: iteration={current_iter}<{min_rounds}, "
             f"forcing reflection instead of stopping"
         )
+        _mc_log_and_recommend(state, "reflection")
         return "reflection"
 
     checks = _check_orchestrator_stop_conditions(state)

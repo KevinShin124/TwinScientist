@@ -30,6 +30,12 @@ try:
 except Exception:
     _MC_AVAILABLE = False
 
+try:
+    from core.experience import exp_store
+    _EXP_AVAILABLE = True
+except Exception:
+    _EXP_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,15 +79,20 @@ def _mc_log_and_recommend(state: AgentState, chosen_action: str) -> str:
 
     Best-effort: 任何异常都会被静默捕获，不影响正常路由。
     """
-    if not _MC_AVAILABLE:
+    if not _MC_AVAILABLE and not _EXP_AVAILABLE:
         return ""
     try:
-        mc_policy.log_step(state, chosen_action)
-        recommendation = mc_policy.recommend(state)
-        return mc_policy.format_recommendation_for_prompt(recommendation)
+        logger.info(f"[MC] Logging step: action={chosen_action}, mc={_MC_AVAILABLE}, exp={_EXP_AVAILABLE}")
+        if _MC_AVAILABLE:
+            mc_policy.log_step(state, chosen_action)
+        if _EXP_AVAILABLE:
+            exp_store.log_step(state, chosen_action)
+        if _MC_AVAILABLE:
+            recommendation = mc_policy.recommend(state)
+            return mc_policy.format_recommendation_for_prompt(recommendation)
     except Exception as e:
-        logger.debug(f"[MC] log_and_recommend failed: {e}")
-        return ""
+        logger.warning(f"[MC] log_and_recommend failed: {e}")
+    return ""
 
 
 def _mc_influence_route(state: AgentState, default_action: str, candidates: list[str]) -> str:
@@ -541,23 +552,27 @@ def route_after_hypothesis(state: AgentState) -> str:
     # New proposals can always go to experiment design
     proposed = [h for h in state.get("hypothesis_tree", []) if h.get("status") == "proposed"]
     if proposed:
-        return "experiment_design"
-
-    approved = [h for h in state.get("hypothesis_tree", []) if h.get("status") == "approved_by_reviewer"]
-    if approved:
-        return "experiment_design"
-
-    return "reflection"  # No viable hypotheses to explore
+        action = "experiment_design"
+    elif [h for h in state.get("hypothesis_tree", []) if h.get("status") == "approved_by_reviewer"]:
+        action = "experiment_design"
+    else:
+        action = "reflection"  # No viable hypotheses to explore
+    _mc_log_and_recommend(state, action)
+    return action
 
 
 def route_after_experiment(state: AgentState) -> str:
     """实验设计完成后进入数据分析"""
-    return "data_analysis"
+    action = "data_analysis"
+    _mc_log_and_recommend(state, action)
+    return action
 
 
 def route_after_analysis(state: AgentState) -> str:
     """数据分析后进入解读"""
-    return "interpretation"
+    action = "interpretation"
+    _mc_log_and_recommend(state, action)
+    return action
 
 
 def route_after_reviewer(state: AgentState) -> str:
