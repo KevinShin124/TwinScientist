@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     domain          TEXT NOT NULL,
     query_hash      TEXT NOT NULL,       -- SHA-256 prefix of research question
     started_at      REAL NOT NULL,
-    ended_at        REAL NOT NULL,
+    ended_at        REAL,                -- NULL until flush_session()
     iteration_end   INTEGER NOT NULL,    -- total iterations consumed
     convergence_end REAL NOT NULL,       -- final convergence_score
     evidence_str    REAL NOT NULL,       -- avg evidence strength at end
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     reward_overall  REAL DEFAULT 0.0,    -- computed at flush
     reward_conv     REAL DEFAULT 0.0,
     reward_evidence REAL DEFAULT 0.0,
-    reward_review   REAL DEFAULT 0.0,
+    reward_review   REAL DEFAULT 0.0
 );
 
 -- One row per *routing step* inside a session
@@ -257,11 +257,21 @@ class ExperienceStore:
                 rows,
             )
 
-            # Assign Monte Carlo cumulative reward (single-step episodes get full return)
-            self.conn.execute(
-                "UPDATE steps SET cum_reward = ? WHERE session_id = ?",
-                (reward["overall"], sid),
-            )
+            # Assign Monte Carlo discounted cumulative reward per step
+            n_steps = len(self._pending_steps)
+            gamma = 0.9
+            final_reward = reward["overall"]
+            for step_data in self._pending_steps:
+                idx = step_data["step_idx"]
+                # Later steps receive higher per-step credit (closer to outcome)
+                step_r = final_reward * (0.3 + 0.7 * (idx + 1) / n_steps)
+                # G_t = sum of gamma^(k-t) * r_k from t to T
+                remaining = n_steps - idx
+                cum_r = step_r * (1 - gamma ** remaining) / (1 - gamma) if remaining > 0 else step_r
+                self.conn.execute(
+                    "UPDATE steps SET cum_reward = ? WHERE session_id = ? AND step_idx = ?",
+                    (round(cum_r, 4), sid, idx),
+                )
 
             # Flush policy stats
             self._refresh_policy_stats(self._domain)

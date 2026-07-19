@@ -129,18 +129,56 @@ def extract_feature_vector(state: dict) -> dict[str, Any]:
     evidence_chains = state.get("evidence_chains", [])
     reviews = state.get("review_records", [])
     hypotheses = state.get("hypothesis_tree", [])
+    experiments = state.get("experiment_records", [])
+    anomaly_graph = state.get("anomaly_graph", [])
+
+    # Hypothesis status distribution
+    approved = sum(1 for h in hypotheses if h.get("status") == "approved_by_reviewer")
+    proposed = sum(1 for h in hypotheses if h.get("status") == "proposed")
+    refuted  = sum(1 for h in hypotheses
+                   if h.get("status") in ("refuted", "refuted_in_tournament"))
+    needs_rev = sum(1 for h in hypotheses if h.get("status") == "needs_revision")
+    pruned   = sum(1 for h in hypotheses if h.get("status") == "pruned")
+    active   = sum(1 for h in hypotheses if h.get("status") == "active")
+
+    rev_scores = [r.get("total_score", 50) for r in reviews]
 
     return {
         "iteration": state.get("iteration", 0),
+        "remaining_budget": max(
+            state.get("_max_iterations_", 200) - state.get("iteration", 0), 0
+        ),
         "avg_evidence": round(
             sum(e.get("strength", 0.5) for e in evidence_chains) / max(len(evidence_chains), 1), 3
         ),
+        "max_evidence": round(
+            max((e.get("strength", 0.5) for e in evidence_chains), default=0.0), 3
+        ),
+        "min_evidence": round(
+            min((e.get("strength", 0.5) for e in evidence_chains), default=0.0), 3
+        ),
         "convergence": state.get("convergence_score", 0.0),
-        "latest_review": reviews[-1].get("total_score", 0) if reviews else 0,
-        "num_hyps": len([h for h in hypotheses if h.get("status") not in ("pruned", "refuted")]),
+        "latest_review": rev_scores[-1] if rev_scores else 0,
+        "avg_review": round(
+            sum(rev_scores) / max(len(rev_scores), 1), 1
+        ) if rev_scores else 0,
+        "num_hyps": len(hypotheses),
+        "approved": approved,
+        "proposed": proposed,
+        "active": active,
+        "refuted": refuted,
+        "needs_revision": needs_rev,
+        "pruned": pruned,
+        "num_evidence": len(evidence_chains),
+        "num_experiments": len(experiments),
         "consecutive_failures": state.get("consecutive_failures", 0),
         "prev_action": state.get("current_action", "none"),
         "uncertainty": state.get("uncertainty_level", 0.5),
+        "anomaly_count": len(anomaly_graph),
+        "has_real_analysis": any(
+            isinstance(e, dict) and e.get("type") == "causal_inference"
+            for e in evidence_chains
+        ),
     }
 
 
@@ -177,24 +215,28 @@ def compute_step_reward(state: dict, action: str, next_state: dict | None = None
 
     Returns: float in [-1.0, 1.0]
     """
-    reward = 0.0
-
-    # --- Signal 1: Review score quality ---
+    # --- Signal 1: Review score quality (bounded to [-0.15, +0.15]) ---
+    review_r = 0.0
     reviews = state.get("review_records", [])
     if reviews:
         latest_score = reviews[-1].get("total_score", 50)
-        # Normalize to [-0.5, 0.5] range: score 0→-0.5, 50→0, 100→+0.5
-        reward += (latest_score - 50) / 100.0 * 0.3
+        if isinstance(latest_score, (int, float)) and not isinstance(latest_score, bool):
+            latest_score = max(0, min(100, latest_score))
+            # Normalize to [-0.5, 0.5] range: score 0→-0.5, 50→0, 100→+0.5
+            review_r = (latest_score - 50) / 100.0 * 0.3
 
-    # --- Signal 2: Evidence strength ---
+    # --- Signal 2: Evidence strength (bounded to [0, +0.2]) ---
+    evidence_r = 0.0
     evidence_chains = state.get("evidence_chains", [])
     if evidence_chains:
-        avg_strength = sum(e.get("strength", 0.5) for e in evidence_chains) / len(evidence_chains)
-        reward += avg_strength * 0.2
+        avg_strength = sum(
+            max(0.0, min(1.0, e.get("strength", 0.5))) for e in evidence_chains
+        ) / len(evidence_chains)
+        evidence_r = avg_strength * 0.2
 
-    # --- Signal 3: Convergence progress ---
-    convergence = state.get("convergence_score", 0.0)
-    reward += convergence * 0.15
+    # --- Signal 3: Convergence progress (bounded to [0, +0.15]) ---
+    convergence = max(0.0, min(1.0, state.get("convergence_score", 0.0)))
+    convergence_r = convergence * 0.15
 
     # --- Signal 4: Action fitness (domain knowledge heuristics) ---
     hypotheses = state.get("hypothesis_tree", [])
@@ -239,9 +281,12 @@ def compute_step_reward(state: dict, action: str, next_state: dict | None = None
     if iteration >= max_iter - 2 and action not in ("termination_eval", "report_writing"):
         fitness -= 0.1
 
-    reward += fitness * 0.35
+    # Bound fitness to [-0.2, +0.15] before weighting
+    fitness = max(-0.2, min(0.15, fitness))
+    fitness_r = fitness * 0.35
 
-    # Clamp to [-1, 1]
+    # --- Combine with explicit clamping ---
+    reward = review_r + evidence_r + convergence_r + fitness_r
     return round(max(-1.0, min(1.0, reward)), 4)
 
 

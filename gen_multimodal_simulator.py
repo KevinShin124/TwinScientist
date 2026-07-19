@@ -263,9 +263,10 @@ class BiometricModel:
     """
 
     # Per-subject random effects (individual heterogeneity)
-    SUBJECT_PROFILE_KEYS = ["base_hr", "hrv_baseline", "temp_sensitivity",
+    SUBJECT_PROFILE_KEYS = ["base_hr", "hrv_baseline", "rmssd_baseline", "temp_sensitivity",
                             "co2_sensitivity", "pm_sensitivity", "voc_sensitivity",
-                            "spo2_baseline", "ppv_baseline", "noise_floor"]
+                            "spo2_baseline", "ppo_baseline", "hr_co2_factor",
+                            "humid_sensitivity", "age_effect"]
 
     def __init__(self, seed: int = 42):
         self.rng = random.Random(seed)
@@ -330,7 +331,7 @@ class BiometricModel:
         oxidative_stress = pm_excess * 0.5 + VOC * 0.002    # PM + VOC co-contribute
         systemic_inflam = pm_excess * 0.3 + VOC * 0.001
 
-        neurotoxic = VOC * 0.003 * subject["voc_sensitivity"] * 200
+        neurotoxic = VOC * 0.003 * abs(subject["voc_sensitivity"]) * 200
 
         thermal_comfort_impair = abs(env["H"] - baseline_H) * 0.05 + temp_excess * 0.3
 
@@ -399,7 +400,7 @@ class BiometricModel:
                 - load["thermo_load"] * 3.0
                 - abs(subject["co2_sensitivity"]) * ((env["CO2"] / 400) - 1) * 100
                 - load["systemic_inflam"] * 5.0
-                + load["neurotoxic"] * 10
+                - load["neurotoxic"] * 6.0                              # neurotoxic impairs autonomic regulation
                 - abs(subject["humid_sensitivity"]) * abs(env["H"] - 45)
             )
             sdnn = _safe(hrv_sdnn, 10, 120)
@@ -410,20 +411,19 @@ class BiometricModel:
                 subject["rmssd_baseline"]
                 - load["symp_activation"] * 6.0
                 - abs(subject["co2_sensitivity"]) * ((env["CO2"] / 400) - 1) * 60
-                - load["neurotoxic"] * 7
+                - load["neurotoxic"] * 5.0                              # neurotoxic suppresses vagal tone
                 - load["thermo_load"] * 2.0
             )
             rmssd = _safe(rmssd, 5, 100)
 
             # === 4. PPG (Photoplethysmography pulse amplitude) ===
             # Increases with vasodilation (heat) but decreases with inflammation
-            ppg = (
-                subject["ppo_baseline"]
+            ppg_delta = (
                 + load["thermo_load"] * 0.15                           # vasodilation increases amplitude
                 - load["systemic_inflam"] * 0.08                       # inflammation constricts vessels
                 + load["symp_activation"] * (-0.05)                    # sympathetic can cause peripheral vasoconstriction
             )
-            ppg_point = subject["ppo_baseline"] + ppg * 0.5 + self.rng.gauss(0, 0.08)
+            ppg_point = subject["ppo_baseline"] + ppg_delta + self.rng.gauss(0, 0.08)
             ppg = 0.8 * prev_ppg_val + 0.2 * ppg_point  # smooth
             prev_ppg_val = ppg
 
