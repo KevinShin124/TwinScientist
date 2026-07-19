@@ -411,8 +411,8 @@ DECISION_PROMPT_TEMPLATE = """## 任务：科研编排决策
 
 你是 twinScientist 系统的 Orchestrator。根据以下状态诊断，选择**最合适的一个**认知节点继续推进。
 
-**⚠️ 多轮循环硬约束（最多 200 轮）：**
-- 当前轮次超过 200 轮时，必须终止并进入 report_writing
+**⚠️ 多轮循环硬约束（最多 {max_iters} 轮）：**
+- 当前轮次超过 {max_iters} 轮时，必须终止并进入 report_writing
 - 每一轮结束后都必须回答：①本轮实验有哪些漏洞或局限？②如果修正这些漏洞，假设应该怎么改？③修正后的假设是否值得再验证一次？
 
 {state_diagnosis}
@@ -433,7 +433,7 @@ DECISION_PROMPT_TEMPLATE = """## 任务：科研编排决策
 6. **每个假设都应该被验证**：不要跳过 experiment_design 直接进入 report_writing
 7. **禁止无效循环**：如果连续生成→评审→拒绝→重新生成的循环超过 3 轮，换策略（改变搜索方向或缩小范围）
 8. **禁止重复执行**：`last_executed_action` 是上一步刚执行完的节点，不要再次选择它（termination_eval 除外）
-9. **二百轮上限**：无论研究进展如何，第 200 轮结束后必须终止
+9. **{max_iters}轮上限**：无论研究进展如何，第 {max_iters} 轮结束后必须终止
 10. **参考蒙特卡洛推荐**：如果有 MC 策略推荐，请参考其 Q-values 和置信度做出决策
 
 ## 输出格式（严格遵守）
@@ -474,6 +474,7 @@ async def llm_orchestrator_decision(state: AgentState) -> str:
     messages = [
         {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
         {"role": "user", "content": DECISION_PROMPT_TEMPLATE.format(
+            max_iters=state.get("_max_iterations_", 200),
             state_diagnosis=diagnosis,
             last_executed_action=state.get("current_action", "none"),
             mc_recommendation=mc_rec_text,
@@ -510,6 +511,14 @@ def _deterministic_fallback(state: AgentState) -> str:
     LLM 不可用时的确定性降级路由。
     保证系统即使在无 LLM 连接时也能基本运行。
     """
+    # When iteration exceeds limit, skip right to report writing.
+    # This avoids an extra wasted cycle of hypothesis_generation → ... → termination_eval.
+    max_iter = state.get("_max_iterations_", 200)
+    iteration = state.get("iteration", 0)
+    if iteration >= max_iter:
+        logger.info(f"[DeterministicFallback] iteration={iteration} >= max_iter={max_iter}, routing to report_writing")
+        return "report_writing"
+
     hypotheses = state.get("hypothesis_tree", [])
     status_counts = {}
     for h in hypotheses:
@@ -524,8 +533,6 @@ def _deterministic_fallback(state: AgentState) -> str:
     if status_counts.get("needs_revision", 0) > 0:
         return "reflection"
 
-    max_iter = state.get("_max_iterations_", 200)
-    iteration = state.get("iteration", 0)
     if iteration >= max_iter:  # 迭代次数硬上限
         return "termination_eval"
 
@@ -603,6 +610,7 @@ def route_after_termination(state: AgentState) -> str:
     """
     终止决策路由 —— 严格优先级顺序 + MC 策略影响
 
+    P0: 紧急出口 — 超出 max_iterations+2 轮，强制停止（安全网）
     P1: 迭代次数硬上限 (绝对天花板)
     P2: 读取 node_termination_eval 的计算结论 (优先复用，不复算)
     P3: 独立综合评分回退 (原始行为的最后兜底)
@@ -610,6 +618,16 @@ def route_after_termination(state: AgentState) -> str:
     """
     max_iters = state.get("_max_iterations_", 200)
     iteration = state.get("iteration", 0)
+
+    # === P0: 紧急出口 — 超出上限+2轮，不跟你讲道理了 ===
+    if iteration >= max_iters + 2:
+        logger.warning(
+            f"[RouteAfterTerm] EMERGENCY EXIT: iteration={iteration} >= max_iterations({max_iters})+2, "
+            f"forcing report_writing"
+        )
+        action = "report_writing"
+        _mc_log_and_recommend(state, action)
+        return action
 
     # === P1: 绝对天花板 ===
     if iteration >= max_iters:

@@ -55,10 +55,15 @@ def _after_reviewer_route(state: AgentState) -> str:
     Routing logic:
       0) Minimum rounds guardrail — force at least min_rounds (default 2) of
          iteration before ANY early termination. Prevents single-pass false positives.
-      1) Max rounds reached → termination_eval
-      2) Evidence >0.85 AND score >85 AND rounds>=min_rounds → report_writing (conclusion clear)
-      3) Hypothesis similarity >0.95 → termination_eval (converged)
-      4) Otherwise → reflection (continue next round)
+      1) Stop conditions met (any reason) → termination_eval
+         → route_after_termination reads _termination_result → report_writing
+      2) Otherwise → reflection (next round)
+
+    Key design: ALL stop paths funnel through termination_eval first.
+    This ensures route_after_termination always gets a _termination_result
+    to read — the router never recomputes its own combined score.
+    The "evidence_strong shortcut" was removed because it bypassed
+    termination_eval entirely, violating the TerminationEval verdict principle.
     """
     # === Guardrail: minimum rounds before any termination ===
     min_rounds = int(os.getenv("MIN_REFLECTION_ROUNDS", "2"))
@@ -74,14 +79,12 @@ def _after_reviewer_route(state: AgentState) -> str:
     checks = _check_orchestrator_stop_conditions(state)
 
     if checks["stop"]:
-        if checks["max_round_reached"] or checks["converged"]:
-            logger.info(f"[AfterReviewer] ORCHESTRATOR STOPPED (terminate): {checks['reason']}")
-            action = "termination_eval"
-        else:
-            # Evidence strong AND passed min rounds — proceed to report writing
-            logger.info(f"[AfterReviewer] EVIDENCE_STRONG (after {min_rounds}+ rounds): {checks['reason']}")
-            action = "report_writing"
+        # ALL stop paths now go through termination_eval → route_after_termination
+        # The router will unconditionally respect _termination_result.should_terminate
+        logger.info(f"[AfterReviewer] STOP CONDITION MET: {checks['reason']}")
+        action = "termination_eval"
     else:
+        # Not stopping → direct path to reflection (no detour through termination_eval)
         logger.info(f"[AfterReviewer] CONTINUE: {checks['reason']}")
         action = "reflection"
 
