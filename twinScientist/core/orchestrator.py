@@ -134,6 +134,21 @@ def _mc_influence_route(state: AgentState, default_action: str, candidates: list
         return default_action
 
 
+# ============================================================
+# Cached Orchestrator Stop Conditions — avoid recomputation per iteration
+# ============================================================
+
+def get_cached_orch_check(state: AgentState) -> dict | None:
+    """返回已缓存的 orchestrator 停止条件计算结果（如果有）"""
+    return state.get("_orch_stop_check", None)
+
+
+def set_orch_check_in_state(state: AgentState, checks: dict) -> dict:
+    """将 orchestrator 停止条件计算结果存入 state，供后续节点复用"""
+    state["_orch_stop_check"] = checks
+    return state
+
+
 def _check_orchestrator_stop_conditions(state: AgentState) -> dict:
     """
     Orchestrator 每轮结束时的停止/继续决策检查。
@@ -147,6 +162,11 @@ def _check_orchestrator_stop_conditions(state: AgentState) -> dict:
         "similarity_score": float,  # 当前假设与上一轮的相似度
     }
     """
+    # Check if caller has already computed and cached the result (avoid redundant work)
+    cached = state.get("_orch_stop_check")
+    if cached:
+        logger.info("[OrchestratorStop] Reusing cached check result")
+        return cached
     result = {
         "stop": False,
         "reason": "",

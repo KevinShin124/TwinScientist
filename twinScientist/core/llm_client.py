@@ -43,6 +43,9 @@ class QwenClient:
         self._input_tokens: int = 0
         self._output_tokens: int = 0
 
+        # 持久化 HTTP 客户端 — 跨调用复用 TCP/TLS 连接，避免每次重建握手开销
+        self._client = httpx.AsyncClient(timeout=180.0)
+
     @property
     def total_input_tokens(self) -> int:
         return self._input_tokens
@@ -92,41 +95,40 @@ class QwenClient:
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=180.0) as client:
-                    resp = await client.post(
-                        f"{self.base_url}/chat/completions",
-                        headers=self._build_headers(),
-                        json=payload,
+                resp = await self._client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._build_headers(),
+                    json=payload,
+                )
+
+                # 记录 Token
+                usage = resp.json().get("usage", {})
+                self._input_tokens += usage.get("input_tokens", 0)
+                self._output_tokens += usage.get("output_tokens", 0)
+
+                if resp.status_code == 429:
+                    # Rate limit — 获取 Retry-After 或使用默认延迟
+                    retry_after = float(resp.headers.get("Retry-After", self.retry_delay * (2 ** attempt)))
+                    logger.warning(f"[QwenClient] Rate limited on attempt {attempt}. Waiting {retry_after}s")
+                    await asyncio.sleep(retry_after)
+                    continue
+
+                if resp.status_code >= 500:
+                    raise httpx.HTTPStatusError(
+                        f"Server error {resp.status_code}",
+                        request=resp.request,
+                        response=resp,
                     )
 
-                    # 记录 Token
-                    usage = resp.json().get("usage", {})
-                    self._input_tokens += usage.get("input_tokens", 0)
-                    self._output_tokens += usage.get("output_tokens", 0)
+                resp.raise_for_status()
+                result = resp.json()
 
-                    if resp.status_code == 429:
-                        # Rate limit — 获取 Retry-After 或使用默认延迟
-                        retry_after = float(resp.headers.get("Retry-After", self.retry_delay * (2 ** attempt)))
-                        logger.warning(f"[QwenClient] Rate limited on attempt {attempt}. Waiting {retry_after}s")
-                        await asyncio.sleep(retry_after)
-                        continue
-
-                    if resp.status_code >= 500:
-                        raise httpx.HTTPStatusError(
-                            f"Server error {resp.status_code}",
-                            request=resp.request,
-                            response=resp,
-                        )
-
-                    resp.raise_for_status()
-                    result = resp.json()
-
-                    logger.debug(
-                        f"[QwenClient] Completion OK — model={self.model}, "
-                        f"in_tokens={usage.get('input_tokens', '?')}, "
-                        f"out_tokens={usage.get('output_tokens', '?')}"
-                    )
-                    return result
+                logger.debug(
+                    f"[QwenClient] Completion OK — model={self.model}, "
+                    f"in_tokens={usage.get('input_tokens', '?')}, "
+                    f"out_tokens={usage.get('output_tokens', '?')}"
+                )
+                return result
 
             except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
                 last_error = e
@@ -168,27 +170,26 @@ class QwenClient:
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=600.0) as client:
-                    async with client.stream(
-                        "POST",
-                        f"{self.base_url}/chat/completions",
-                        headers=self._build_headers(),
-                        json=payload,
-                    ) as resp:
-                        resp.raise_for_status()
-                        async for line in resp.aiter_lines():
-                            if line.startswith("data: "):
-                                data_str = line[6:]
-                                if data_str.strip() == "[DONE]":
-                                    break
-                                try:
-                                    chunk = json.loads(data_str)
-                                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                                    content = delta.get("content")
-                                    if content:
-                                        yield content
-                                except json.JSONDecodeError:
-                                    continue
+                async with self._client.stream(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    headers=self._build_headers(),
+                    json=payload,
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content")
+                                if content:
+                                    yield content
+                            except json.JSONDecodeError:
+                                continue
                 return  # 成功完成
 
             except Exception as e:
@@ -258,9 +259,41 @@ async def create_client(
     api_key: str,
     model: str = "qwen-max",
 ) -> QwenClient:
-    """工厂函数：创建 QwenClient 实例"""
+    """工厂函数：创建 QwenClient 实例（每次新建，用于测试/隔离场景）"""
     return QwenClient(
         base_url=base_url,
         api_key=api_key,
         model=model,
     )
+
+
+# ============================================================
+# 全局单例客户端 — 所有节点共享同一个 QwenClient，复用 TCP/TLS 连接
+# ============================================================
+
+_global_client: QwenClient | None = None
+
+
+async def init_global_client(base_url: str, api_key: str, model: str = "qwen-max") -> QwenClient:
+    """首次调用时创建全局单例客户端，后续调用直接返回同一实例"""
+    global _global_client
+    if _global_client is None:
+        _global_client = QwenClient(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+        )
+    return _global_client
+
+
+def get_global_client() -> QwenClient | None:
+    """获取全局单例客户端（可能尚未初始化，返回 None）"""
+    return _global_client
+
+
+async def close_global_client() -> None:
+    """关闭全局客户端并释放 HTTP 连接池资源。应在程序退出前调用"""
+    global _global_client
+    if _global_client is not None:
+        await _global_client._client.aclose()
+        _global_client = None

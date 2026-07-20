@@ -37,7 +37,12 @@ from core.prompts import (
     REPORT_WRITING_TEMPLATE,
     TOURNAMENT_EVAL_PROMPT,
 )
-from core.orchestrator import _check_orchestrator_stop_conditions, _hypothesis_statement_similarity
+from core.orchestrator import (
+    _check_orchestrator_stop_conditions,
+    get_cached_orch_check,
+    set_orch_check_in_state,
+    _hypothesis_statement_similarity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +52,13 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 def _get_llm() -> QwenClient:
-    """获取 Qwen Client 实例"""
+    """获取 Qwen Client 实例 — 优先复用全局单例（连接复用），未初始化时降级创建新实例"""
+    from core.llm_client import get_global_client
+
+    global_client = get_global_client()
+    if global_client is not None:
+        return global_client
+    # Fallback: create a new instance (shouldn't normally happen after init)
     return QwenClient(
         base_url=settings.bailian_base_url,
         api_key=settings.bailian_api_key,
@@ -532,11 +543,14 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
     tree = copy.deepcopy([dict(h) for h in state.get("hypothesis_tree", [])])
     tree.extend(parsed_hypotheses)
 
-    # PRUNING: Remove pruned/refuted leaf nodes from previous rounds
+    # PRUNING: Remove pruned/refuted_in_tournament hypotheses from previous rounds
+    # FIX: Also remove "refuted_in_tournament" — these were eliminated by tournament but
+    #       never cleaned up, causing unbounded context growth in downstream LLM calls
     pruned_count = 0
     kept_tree = []
     for h in tree:
-        if h.get("status") == "pruned":
+        status = h.get("status", "")
+        if status in ("pruned", "refuted_in_tournament"):
             pruned_count += 1
         else:
             kept_tree.append(h)
@@ -1191,7 +1205,10 @@ async def node_reflection(state: AgentState) -> dict:
     hyp_info = str(failed_hyp)[:500] if failed_hyp else "无指定失败假设"
 
     # --- Compute orchestrator stop-check analysis so reflection has full context ---
-    orch_checks = _check_orchestrator_stop_conditions(state)
+    # Reuse cached result if already computed (avoids redundant iteration over state)
+    orch_checks = get_cached_orch_check(state)
+    if orch_checks is None:
+        orch_checks = _check_orchestrator_stop_conditions(state)
     orch_reason = orch_checks.get("reason", "")
     orch_evidence_strength = orch_checks.get("avg_evidence_strength", 0)
     orch_similarity_score = orch_checks.get("similarity_score", 0)
@@ -1286,16 +1303,20 @@ async def node_reflection(state: AgentState) -> dict:
         tree.append(new_hyp)
 
     # PRUNING STRATEGY: Remove deeply unproductive branches
-    # 1. Prune refuted hypotheses that have no children
+    # FIX: Also remove "refuted_in_tournament" — same gap as in hypothesis_generation
     pruned_count = 0
     kept_tree = []
     for h in tree:
-        if h.get("status") == "refuted" and len(h.get("children_ids", [])) == 0:
+        status = h.get("status", "")
+        if status in ("refuted", "pruned") and len(h.get("children_ids", [])) == 0:
             h["status"] = "pruned"
             pruned_count += 1
-        elif h.get("status") == "proposed" and h.get("confidence_prior", 0) < 0.15:
+        elif status == "proposed" and h.get("confidence_prior", 0) < 0.15:
             # Very low confidence proposals get pruned
             h["status"] = "pruned"
+            pruned_count += 1
+        elif status == "refuted_in_tournament":
+            # Tournament losers with no children get cleaned up here too
             pruned_count += 1
         else:
             kept_tree.append(h)
@@ -1307,6 +1328,7 @@ async def node_reflection(state: AgentState) -> dict:
         "anomaly_graph": anomaly_graph,
         "hypothesis_tree": kept_tree,
         "consecutive_failures": 0 if new_hyp else state.get("consecutive_failures", 0) + 1,
+        "_orch_stop_check": orch_checks,  # Cache for subsequent calls within this iteration
         "current_action": "reflection",
     }
 
