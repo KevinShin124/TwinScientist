@@ -44,7 +44,8 @@ class QwenClient:
         self._output_tokens: int = 0
 
         # 持久化 HTTP 客户端 — 跨调用复用 TCP/TLS 连接，避免每次重建握手开销
-        self._client = httpx.AsyncClient(timeout=180.0)
+        # timeout: connect=10s, read=120s, write=10s, pool=30s — 总最长约 2 分钟
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=30.0))
 
     @property
     def total_input_tokens(self) -> int:
@@ -133,15 +134,16 @@ class QwenClient:
             except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
                 last_error = e
                 wait_time = self.retry_delay * (2 ** (attempt - 1))
-                logger.warning(f"[QwenClient] Connection error on attempt {attempt}/{self.max_retries}: {e}")
+                logger.warning(f"[QwenClient] Connection error on attempt {attempt}/{self.max_retries}: {type(e).__name__}: {e}")
                 if attempt < self.max_retries:
                     await asyncio.sleep(wait_time)
             except httpx.HTTPStatusError as e:
                 last_error = e
                 # 4xx 非 429 通常是请求错误，不重试
                 if 400 <= e.response.status_code < 500:
+                    logger.error(f"[QwenClient] HTTP {e.response.status_code} ({e.response.reason_phrase}) on attempt {attempt}: {e.response.text[:200]}")
                     break
-                logger.warning(f"[QwenClient] HTTP {e.response.status_code} on attempt {attempt}")
+                logger.warning(f"[QwenClient] HTTP {e.response.status_code} on attempt {attempt}: {e.response.text[:200]}")
                 if attempt < self.max_retries:
                     await asyncio.sleep(self.retry_delay * (2 ** (attempt - 1)))
 

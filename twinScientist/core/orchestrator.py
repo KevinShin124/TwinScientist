@@ -565,6 +565,28 @@ def _deterministic_fallback(state: AgentState) -> str:
 
 def route_after_literature(state: AgentState) -> str:
     """文献完成后：确定性的过渡到假设生成阶段 + MC 日志"""
+    # Guardrail against infinite literature_review loops (e.g., LLM/API failures)
+    max_iters = state.get("_max_iterations_", 200)
+    iteration = state.get("iteration", 0)
+    if iteration >= max_iters:
+        logger.info(
+            f"[RouteAfterLit] MAX_ITER_REACHED ({iteration}>={max_iters}), "
+            f"forcing hypothesis_generation instead of re-running literature_review"
+        )
+        return "hypothesis_generation"
+
+    # If literature was already attempted and produced no facts, force-advance
+    # to hypothesis_generation instead of looping forever.
+    lit_already_done = state.get("_literature_done", False)
+    prev_facts = state.get("fact_extraction", [])
+    if lit_already_done and len(prev_facts) == 0:
+        logger.warning(
+            "[RouteAfterLit] Literature already skipped (no facts), "
+            "forcing hypothesis_generation"
+        )
+        _mc_log_and_recommend(state, "hypothesis_generation")
+        return "hypothesis_generation"
+
     facts = state.get("fact_extraction", [])
     if not facts or len(facts) < 2:
         action = "literature_review"

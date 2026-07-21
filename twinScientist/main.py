@@ -240,7 +240,7 @@ def main():
     parser = argparse.ArgumentParser(description="twinScientist — AI Scientist CLI")
     parser.add_argument("--question", "-q", type=str, help="研究问题")
     parser.add_argument("--domain", "-d", type=str, help="学科领域")
-    parser.add_argument("--iterations", "-i", type=int, default=5, help="最大迭代次数（最多200轮）")
+    parser.add_argument("--iterations", "-i", type=int, default=200, help="最大迭代次数（最多200轮）")
     parser.add_argument("--ui", action="store_true", help="启动 Gradio Web UI")
 
     args = parser.parse_args()
