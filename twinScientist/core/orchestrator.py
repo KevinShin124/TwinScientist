@@ -179,7 +179,21 @@ def _check_orchestrator_stop_conditions(state: AgentState) -> dict:
     iteration = state.get("iteration", 0)
     max_iterations = state.get("_max_iterations_", 200)  # Hard cap enforced by caller
 
-    # --- Condition 1: 检查当前轮次是否达到最大轮次（200轮）---
+    # --- Condition 1a: Early-exit guardrail — no hypotheses after ≥3 iterations ===
+    # When LLM/API consistently fails to generate hypotheses, force report_writing
+    # rather than looping forever on hypothesis_generation → reflection → repeat
+    active_hyps = [
+        h for h in state.get("hypothesis_tree", [])
+        if h.get("status") not in ("pruned", "refuted", "refuted_in_tournament")
+    ]
+
+    if len(active_hyps) == 0 and iteration >= 3:
+        result["stop"] = True
+        result["reason"] = f"连续 {iteration} 轮未生成任何假设（可能 LLM/API 故障），强制终止并生成报告"
+        logger.info(f"[OrchestratorStop] NO_HYPOTHESES_EVER: forcing early exit after {iteration} iterations with 0 viable hypotheses")
+        return result
+
+    # --- Condition 1b: 检查当前轮次是否达到最大轮次（200轮）---
     if iteration >= max_iterations:
         result["max_round_reached"] = True
         result["stop"] = True
