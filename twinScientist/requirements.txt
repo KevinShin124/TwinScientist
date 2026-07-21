@@ -1,0 +1,24 @@
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0          # Qwen through OpenAI-compatible API (Bailian)
+pydantic-settings>=2.0.0
+httpx>=0.27.0
+python-dotenv>=1.0.0
+jupyter-client>=8.0.0
+notebook>=7.0.0
+gradio>=4.0.0
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.11.0
+networkx>=3.0
+matplotlib>=3.7.0
+tiktoken>=0.5.0
+
+# Causal Inference
+ccauchy>=1.1.0
+causalgraphicalmodels>=0.5.0
+statsmodels>=0.14.0
+pgmpy>=0.1.20
+bnlearn>=0.5.26
+dowhy>=0.10.0
+torch>=2.0.0               # for GP surrogate model

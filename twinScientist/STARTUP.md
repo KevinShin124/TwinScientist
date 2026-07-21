@@ -2,9 +2,7 @@
 
 ## 环境就绪 ✅
 
-Python 3.12 + pip + 所有核心依赖已安装完毕。
-
-**Python 路径:** `C:\Users\aertuolia\AppData\Local\Programs\Python\Python312\python.exe`
+Python + pip + 所有核心依赖已安装完毕。
 
 ## 最后一步：配置 API Key
 
@@ -12,7 +10,7 @@ Python 3.12 + pip + 所有核心依赖已安装完毕。
 
 在 PowerShell 中执行：
 ```powershell
-cd "D:\项目\TwinScientist--main\TwinScientist--main\twinScientist"
+cd "C:\Users\KevinShin\Desktop\TwinScientist--main3\twinScientist"
 Copy-Item .env.example .env
 notepad .env
 ```
@@ -35,24 +33,20 @@ $env:BAILIAN_API_KEY = "sk-your-real-key"
 
 ### CLI 模式（单次运行）
 ```powershell
-"c:\Users\aertuolia\AppData\Local\Programs\Python\Python312\python.exe" ^
-    "D:\项目\TwinScientist--main\TwinScientist--main\twinScientist\main.py" ^
-    --question "高温环境对老年人心率变异性有何影响？" ^
-    --domain "环境健康" ^
-    --iterations 1
+cd twinScientist
+python main.py --question "高温环境对老年人心率变异性有何影响？" --domain "环境健康" --iterations 10
 ```
 
 ### 交互模式
 ```powershell
-"c:\Users\aertuolia\AppData\Local\Programs\Python\Python312\python.exe" ^
-    "D:\项目\TwinScientist--main\TwinScientist--main\twinScientist\main.py"
+cd twinScientist
+python main.py
 ```
 
 ### Web UI 模式
 ```powershell
-"c:\Users\aertuolia\AppData\Local\Programs\Python\Python312\python.exe" ^
-    "D:\项目\TwinScientist--main\TwinScientist--main\twinScientist\main.py" ^
-    --ui
+cd twinScientist
+python main.py --ui
 ```
 → 浏览器访问 http://127.0.0.1:7860
 
@@ -63,17 +57,17 @@ $env:BAILIAN_API_KEY = "sk-your-real-key"
 
 如需启用这些功能：
 ```powershell
-"c:\Users\aertuolia\AppData\Local\Programs\Python\Python312\python.exe" -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-"c:\Users\aertuolia\AppData\Local\Programs\Python\Python312\python.exe" -m pip install statsmodels ccauchy dowhy bnlearn pgmpy
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install statsmodels ccauchy dowhy bnlearn pgmpy
 ```
 
 ## 常见问题
 
 **Q: 提示找不到 python？**  
-A: 使用完整路径 `"C:\Users\aertuolia\AppData\Local\Programs\Python\Python312\python.exe"` 代替 `python`
+A: 确认 Python 已安装并加入 PATH，或在终端中运行 `python --version` 验证
 
 **Q: 提示缺少模块？**  
-A: 可能需要重启终端以刷新 PATH
+A: 可能需要重启终端以刷新 PATH，或手动安装缺失的包
 
 **Q: LLM 调用超时？**  
 A: 检查网络连接，阿里云 API 可能有时延迟较高

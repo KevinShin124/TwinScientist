@@ -1,11 +1,14 @@
 __pycache__/
 *.pyc
-.env
 .DS_Store
+
+# Secrets (API keys)
+.env
+
+# Logs
 *.log
-*.csv
-*.json
-*.txt
+
+# Generated report
 output/scientific_hypothesis_report.md
 
 # Runtime databases
