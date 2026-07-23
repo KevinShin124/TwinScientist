@@ -1,12 +1,12 @@
 # 科学假设与研究计划
 
 ## 一、待研究问题（Problem Statement）
-**室内高温高CO2环境对办公室人员的心率变异性有何影响？**
+**高温CO2复合暴露对室内工作人员HRV有何因果影响?**
 
 - **学科领域**: 环境—人体关联
-- **研究轮次**: 200
+- **研究轮次**: 0
 - **系统收敛度**: 0.0%
-- **迭代状态**: ✅ 已执行 200 轮迭代反思循环
+- **迭代状态**: ⚠️ 反思循环未被执行（当前为第 0 轮）。本轮仅完成初始验证，建议增加迭代轮次以提升结论可靠性。
 
 ---
 
@@ -18,11 +18,11 @@
 - **跨学科迁移**: 环境工程 × 生物医学信息学 × 因果机器学习
 
 ### 支撑事实（来自文献调研）
-- [温度升高 (T↑) 激活交感神经系统 → 心率(HR)上升、HRV(SDNN/RMSSD)下降] — Wolkove et al., Int J Biometeorol 2007, DOI:10.1007/s00484-006-0060-z
-- [CO₂浓度升高 (>1000ppm) 影响脑血流量、自主神经平衡 → HRV降低] — Allen et al., Environ Health Perspect 2016, DOI:10.1289/EHP220
-- [PM2.5暴露通过氧化应激和全身炎症 → HR下降、SpO₂降低] — Brook et al., Circulation 2010, DOI:10.1161/CIRCULATIONAHA.109.192042
-- [低湿度 (<35%) 加速泪膜蒸发 → 干眼症状、视觉疲劳指数上升] — Kotecha et al., Clin Exp Optom 2012, DOI:10.1111/j.1444-0938.2011.00636.x
-- [VOC暴露通过神经毒性效应 → HRV(RMSSD)下降、认知功能受损] — Nazaroff 2015, Annu Rev Public Health
+- 高温环境可导致人体核心温度升高，进而影响心血管系统功能 | Reference: [需要验证]
+- CO2浓度增加在密闭空间内与认知功能下降有关 | Reference: Allen, J.G., et al., 2016, Environmental Health Perspectives, DOI:10.1289/ehp.1510037
+- 心率变异性(HRV)是评估自主神经系统状态的一个重要指标 | Reference: Task Force of the European Society of Cardiology and the North American Society of Pacing and Electrophysiology, 1996, Circulation, PMID:8598068
+- 短期暴露于高CO2水平可能会引起头痛、嗜睡等不适症状 | Reference: Satish, U., et al., 2012, Environmental Health Perspectives, DOI:10.1289/ehp.1104312
+- 室内外空气污染已被证明会影响HRV，表明环境污染对人体健康有潜在负面影响 | Reference: Brook, R.D., et al., 2010, Journal of the American College of Cardiology, DOI:10.1016/j.jacc.2009.09.063
 
 ---
 
@@ -160,14 +160,16 @@ Y(t) = f(X(t)) + ε(t)
 ## 十一、参考文献（References）
 > **重要声明**: 以下引用必须为真实存在的学术论文。当前由文献调研模块自动提取。
 
-1. Unknown
-2. Unknown
-3. Unknown
-4. Unknown
-5. Unknown
-6. Unknown
-7. Unknown
-8. Unknown
+1. [需要验证]
+2. Allen, J.G., et al., 2016, Environmental Health Perspectives, DOI:10.1289/ehp.1510037
+3. Task Force of the European Society of Cardiology and the North American Society of Pacing and Electrophysiology, 1996, Circulation, PMID:8598068
+4. Satish, U., et al., 2012, Environmental Health Perspectives, DOI:10.1289/ehp.1104312
+5. Brook, R.D., et al., 2010, Journal of the American College of Cardiology, DOI:10.1016/j.jacc.2009.09.063
+6. [需要验证]
+7. [需要验证]
+8. Wargocki, P., & Wyon, D.P., 2007, Indoor Air, DOI:10.1111/j.1600-0668.2007.00476.x
+9. Unknown
+10. Unknown
 
 ---
 
@@ -191,6 +193,6 @@ Y(t) = f(X(t)) + ε(t)
 ---
 
 *本报告由 twinScientist AI Scientist 系统自动生成*
-*生成时间: 2026-07-21 17:12 UTC*
-*迭代轮次: 200/5 | 收敛度: 0.0%*
+*生成时间: 2026-07-23 09:27 UTC*
+*迭代轮次: 0/5 | 收敛度: 0.0%*
 *Agent: Qwen系列 (阿里云百炼平台) | 编排: LangGraph*

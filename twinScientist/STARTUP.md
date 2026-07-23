@@ -53,12 +53,12 @@ python main.py --ui
 ## 可选依赖（暂不安装也可运行）
 
 以下包用于高级因果推断功能（当前代码使用 fallback/granger/ccm 核心逻辑时不需要）：
-- `ccauchy`, `causalgraphicalmodels`, `statsmodels`, `pgmpy`, `bnlearn`, `dowhy`, `torch`
+- `causalgraphicalmodels`, `statsmodels`, `pgmpy`, `bnlearn`, `dowhy`, `torch`
 
 如需启用这些功能：
 ```powershell
 pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install statsmodels ccauchy dowhy bnlearn pgmpy
+pip install statsmodels dowhy bnlearn pgmpy
 ```
 
 ## 常见问题

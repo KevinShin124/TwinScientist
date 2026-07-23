@@ -188,7 +188,7 @@ def build_cognitive_graph() -> "CompiledGraph":
     workflow.add_node("pi_agent_meeting", node_pi_agent_meeting)
     workflow.add_node("human_approval", node_human_approval)
     workflow.add_node("evolution_manager", node_evolution_manager)
-        workflow.add_node("post_report_chat", _node_post_report_chat)
+    workflow.add_node("post_report_chat", _node_post_report_chat)
     workflow.add_node("termination_eval", node_termination_eval)
 
     def _route_ethics(state: AgentState) -> str:
@@ -296,38 +296,54 @@ def build_cognitive_graph() -> "CompiledGraph":
     workflow.add_edge("human_approval", "evolution_manager")
     workflow.add_edge("evolution_manager", "post_report_chat")
 
+    checkpointer = MemorySaver()
+
+    compiled = workflow.compile(
+        interrupt_before=["human_approval", "post_report_chat"],  # HITL: wait for human confirmation; also post-report chat
+        interrupt_after=["literature_review", "debate_then_terminate", "post_report_chat"],  # Interrupt after key decisions AND after post-report greeting
+        checkpointer=checkpointer,
+    )
+
+    return compiled
+
+
+# ──────────────────────────────────────────────
+# Helpers for post-report chat routing (used by UI)
+# ──────────────────────────────────────────────
 
 def _route_post_report_chat(state: AgentState) -> str:
     """Route based on user intent after research concludes."""
     signal = state.get("_routing_signal", "continue_chatting")
-    
+
     # Direct route to previous stages when user requests re-analysis
     if signal.startswith("loop_back_to_"):
         target = signal.replace("loop_back_to_", "")
         logger.info(f"[PostReportChatRouter] Looping back to {target}")
         return target
-    
+
     if signal == "end_session":
         return "END"
-    
+
     # If still chatting with no explicit end signal, stay at current node
     # The next interrupt will pick up the user's message
     if signal == "end_session" or "accept_and_end" in signal:
         return "END"
-    
+
     # Default: let the flow continue (eventually hits END via human path)
     return "_next_node_or_check"
 
 
-    checkpointer = MemorySaver()
+# ──────────────────────────────────────────────
+# Async helpers (debate & termination)
+# ──────────────────────────────────────────────
 
-    compiled = workflow.compile(
-        interrupt_before=["human_approval"],  # HITL: wait for human confirmation
-        interrupt_after=["literature_review", "debate_then_terminate"],  # Interrupt after key decisions
-        checkpointer=checkpointer,
-    )
-
-    return compiled
+async def _direct_terminate(state: AgentState) -> dict:
+    """Skip debate and go straight to termination evaluation."""
+    return {
+        "current_action": "debate_then_terminate",
+        "_max_iterations_": state.get("_max_iterations_", 200),
+        "iteration": state.get("iteration", 0),
+    }
 
 
 async def _node_debate_then_terminate(state: AgentState) -> dict:
@@ -419,11 +435,12 @@ async def _node_debate_then_terminate(state: AgentState) -> dict:
         return await _direct_terminate(state)
 
 
-async def _direct_terminate(state: AgentState) -> dict:
-    """Skip debate and go straight to termination evaluation."""
-    # Just run termination eval and return
-    return {
-        "current_action": "debate_then_terminate",
-        "_max_iterations_": state.get("_max_iterations_", 200),
-        "iteration": state.get("iteration", 0),
-    }
+# ──────────────────────────────────────────────
+# Compiled graph instance — used by main.py and run_real_data_research.py
+#
+# Callers import:  from core.graph import cognitive_graph
+#                :  result = await cognitive_graph.ainvoke(...)
+# So we compile ONCE at module import time and expose the compiled graph.
+# ──────────────────────────────────────────────
+
+cognitive_graph = build_cognitive_graph()

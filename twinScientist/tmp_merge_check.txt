@@ -1,0 +1,152 @@
+async def _node_post_report_chat(state: AgentState) -> dict:
+    """
+    Post-report free-form chat node.
+
+    Called after evolution_manager when the research pipeline has
+    finished generating its report. This node enables open-ended
+    scientific discussion — the kind that happens in real labs
+    long after the initial analysis phase.
+
+    Flow:
+    1. Extract accumulated state summary (report, hypotheses, evidence)
+    2. Load last N chat turns from history for continuity
+    3. Detect if there's an interrupt message via resume_value injection
+    4. Call LLM with combined context + user intent
+    5. Generate structured response (reply text + detected action)
+    6. Route based on detected intent:
+       - challenge/re_analyze → loop_back_to_X
+       - continue/end → return final signal
+       - question/explore → reply & stay in this node
+
+    Args:
+        state: Full AgentState snapshot
+
+    Returns:
+        Dict with updated state fields and internal routing signals.
+        Special keys: _next_action_routing, user_chat_messages_append
+    """
+    from core.llm_client import QwenClient
+    from config.settings import settings
+
+    # ---- Gather current state components ----
+    final_report = state.get("final_report", "")
+    query = state.get("query", "")
+    domain = state.get("domain", "")
+    iteration = state.get("iteration", 0)
+    max_iter = state.get("_max_iterations_", 200)
+    convergence_score = state.get("convergence_score", 0.0)
+    stop_reason = state.get("stop_reason", "unknown")
+
+    hypotheses = state.get("hypothesis_tree", [])
+    evidence_chains = state.get("evidence_chains", [])
+    review_records = state.get("review_records", [])
+    experiment_records = state.get("experiment_records", [])
+    debate_history = state.get("debate_history", [])
+    chat_history = state.get("user_chat_messages", []) or []
+
+    # Extract the latest user message (injected via LangGraph interrupt/resume mechanism).
+    # When the UI calls graph.resume(message), the message arrives here as part of state.
+    incoming_message = state.get("_incoming_resume_message", None)
+
+    # Build comprehensive state summary for the LLM context
+    lines = [
+        "**Research Concluded.** Autonomous investigation complete.",
+        f"\nQuestion: {query}",
+        f"Domain: {domain}",
+        f"Iterations completed: {iteration}/{max_iter}",
+        f"Convergence score: {convergence_score:.0%}",
+        f"Stop reason: {stop_reason}",
+    ]
+
+    # Hypotheses summary
+    active_hyps = [h for h in hypotheses if h.get("status") not in ("pruned", "refused")]
+    sorted_hyps = sorted(
+        active_hyps,
+        key=lambda h: h.get("confidence_posterior", h.get("confidence_prior", 0)),
+        reverse=True,
+    )
+    lines.append(f"\n**Active Hypotheses ({len(sorted_hyps)}):**")
+    for i, h in enumerate(sorted_hyps[:10]):
+        title = str(h.get("title", "?"))[:70]
+        status = h.get("status", "?")
+        posterior = h.get("confidence_posterior", h.get("confidence_prior", "?"))
+        lines.append(f"  [{i+1}] [{status}] \"{title}\" P(H|D)={posterior}")
+    if len(active_hyps) > 10:
+        lines.append(f"  ...and {len(active_hyps) - 10} more")
+
+    # Evidence chains summary
+    if evidence_chains:
+        avg_strength = sum(e.get("strength", 0.5) for e in evidence_chains) / len(evidence_chains)
+        methods_used = set(str(e.get("method_used", "unknown")) for e in evidence_chains)
+        lines.append(f"\n**Evidence Chains:** {len(evidence_chains)} | Avg strength: {avg_strength:.2f} | Methods: {', '.join(sorted(methods_used))}")
+
+    # Experiments summary
+    analyzed_count = sum(1 for e in experiment_records if e.get("results", {}).get("analysis_complete", False))
+    lines.append(f"\n**Experiments:** {analyzed_count}/{len(experiment_records)} analyzed")
+
+    # Reviews summary
+    if review_records:
+        recent_scores = [r.get("total_score", "?") for r in review_records[-5:]]
+        lines.append(f"\n**Review Scores (last 5):** {recent_scores}")
+
+    # Debate history summary
+    if debate_history:
+        n_rounds = len(debate_history)
+        last_r = debate_history[-1]
+        lines.append(f"\n**Debate Rounds:** {n_rounds} | Last score: {last_r.get('score_before', '?')}→{last_r.get('score_after', '?')} | Winner: {last_r.get('winner_side', '?')}")
+
+    # Report excerpt
+    if final_report:
+        report_excerpt = final_report[:1200].replace("\n", " ").replace("\r", "")
+        lines.append(f"\n**Final Report (excerpt):** {report_excerpt}")
+
+    state_summary = "\n".join(lines)
+
+    # ---- Assemble LLM messages ----
+    messages = [
+
+def _detect_intent(message: str | None) -> str:
+    """Detect what the user intends based on their message."""
+    if not message:
+        return "unknown"
+
+    msg_lower = message.lower()
+
+    # Re-analysis requests → route back to analysis pipelines
+    reanalyze_signals = ["重新分析", "re-analyse", "re-analyze", "reanalyze", "换个角度",
+                         "从不同角度", "another angle", "换一种方法", "change method",
+                         "试一下另一种方式", "再分析一遍", "use different approach"]
+    if any(s in msg_lower for s in reanalyze_signals):
+        return "request_re_analysis"
+
+    # New hypothesis generation
+    new_hyp_signals = ["新的假设", "new hypothesis", "generate new", "提出新假说",
+                       "change direction", "调整方向", "换个思路"]
+    if any(s in msg_lower for s in new_hyp_signals):
+        return "request_new_hypothesis"
+
+    # Challenge/critique
+    challenge_signals = ["质疑", "challenge", "wrong", "错误", "质疑你的结论",
+                         "有问题", "我不同意", "不对", "flawed", "漏洞"]
+    if any(s in msg_lower for s in challenge_signals):
+        return "challenge_findings"
+
+    # Deepen understanding
+    deepen_signals = ["解释一下", "explain", "详细说明", "深入一点", "tell me more",
+                      "为什么", "why did you", "是什么意思", "clarify"]
+    if any(s in msg_lower for s in deepen_signals):
+        return "deepen_understanding"
+
+    # End/wrap up
+    end_signals = ["结束", "end", "ok", "可以了", "够了", "accepted", "wrap up",
+                   "done", "可以了就行", "就这样吧"]
+    if any(s in msg_lower for s in end_signals):
+        return "accept_and_end"
+
+    return "general_question"
+
+
+# ====================================================================
+# System Prompts
+# ====================================================================
+
