@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     sensor_data_dir: str = ""
     biometric_data_dir: str = ""
     visual_fatigue_data_dir: str = ""
+    semantic_scholar_api_key: str = ""  # Optional — free registration at semanticscholar.org
 
     # ============================================================
     # Layer 3: Memory System

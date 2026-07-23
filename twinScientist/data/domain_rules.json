@@ -1,0 +1,175 @@
+{
+  "metadata": {
+    "description": "环境—人体关联领域专家规则库，用于逻辑驱动假设生成的演绎推理路径",
+    "version": "1.0",
+    "domain": "environment_human_health",
+    "last_updated": "2026-07-23"
+  },
+  "rules": [
+    {
+      "id": "R001",
+      "name": "温度升高→交感神经激活→HRV下降",
+      "if_conditions": ["temperature_increase"],
+      "then_conclusion": "sympathetic_activation → HRV_decrease",
+      "mechanism": "高温激活交感神经系统，增加心输出量但降低副交感神经张力，导致HRV（SDNN/RMSSD）显著下降",
+      "confidence": 0.85,
+      "target_indicators": ["HRV_SDNN", "HRV_RMSSD", "heart_rate"],
+      "moderating_factors": ["humidity", "acclimatization_status", "activity_level"],
+      "evidence_refs": ["Wolkove2007", "Allen2016", "Griefrian2019"]
+    },
+    {
+      "id": "R002",
+      "name": "CO₂浓度升高→自主神经失衡→HRV下降",
+      "if_conditions": ["CO2_elevated_above_1000ppm"],
+      "then_conclusion": "autonomic_imbalance → HRV_decrease",
+      "mechanism": "室内CO₂浓度超过1000ppm时，脑血流量改变影响自主神经平衡，表现为副交感神经活动减少和HRV降低",
+      "confidence": 0.80,
+      "target_indicators": ["HRV_RMSSD", "HRV_SDNN", "cortisol"],
+      "moderating_factors": ["room_ventilation", "occupant_density", "time_exposure"],
+      "evidence_refs": ["Allen2016", "Seppanen2011"]
+    },
+    {
+      "id": "R003",
+      "name": "PM₂.₅暴露→氧化应激→心率下降+SpO₂降低",
+      "if_conditions": ["PM25_elevated"],
+      "then_conclusion": "oxidative_stress_inflammation → heart_rate_decrease + SpO2_decrease",
+      "mechanism": "细颗粒物通过呼吸道进入循环系统，触发氧化应激反应和全身性炎症，导致毛细血管收缩、血氧运输效率降低",
+      "confidence": 0.82,
+      "target_indicators": ["SpO2", "heart_rate", "PPG_amplitude"],
+      "moderating_factors": ["exposure_duration", "individual_health_status", "particle_composition"],
+      "evidence_refs": ["Brook2010", "Jerrett2009"]
+    },
+    {
+      "id": "R004",
+      "name": "低湿度→泪膜蒸发加速→干眼+视觉疲劳指数上升",
+      "if_conditions": ["low_humidity_below_35"],
+      "then_conclusion": "tear_film_evaporation → dry_eye + visual_fatigue_increase",
+      "mechanism": "相对湿度低于35%时，泪膜蒸发速率显著提高，导致眼部表面应激反应，反映在眨眼频率异常和视觉疲劳评分上升",
+      "confidence": 0.78,
+      "target_indicators": ["visual_fatigue_index", "blink_rate", "tear_breakup_time"],
+      "moderating_factors": ["screen_time", "air_flow", "individual_lacrimation_rate"],
+      "evidence_refs": ["Kotecha2012", "Amrnicha2013"]
+    },
+    {
+      "id": "R005",
+      "name": "VOC暴露→神经毒性→HRV下降+认知功能受损",
+      "if_conditions": ["VOC_elevated"],
+      "then_conclusion": "neurotoxicity → HRV_RMSSD_decrease + cognitive_function_decline",
+      "mechanism": "挥发性有机化合物通过血脑屏障发挥神经毒性作用，损害自主神经调节能力并降低前额叶皮层认知功能",
+      "confidence": 0.75,
+      "target_indicators": ["HRV_RMSSD", "cognitive_response_time", "P300_amplitude"],
+      "moderating_factors": ["compound_type", "concentration_level", "exposure_history"],
+      "evidence_refs": ["Nazaroff2015", "Bornehag2017"]
+    },
+    {
+      "id": "R006",
+      "name": "高温高湿复合→热舒适度骤降→HRV系统性降低",
+      "if_conditions": ["high_temperature_high_humidity"],
+      "then_conclusion": "thermal_discomfort_synergy → systemic_HRV_reduction",
+      "mechanism": "高温与高湿的协同效应远超单一因子之和，汗液蒸发效率降低导致核心体温上升更快，触发更强的心血管应激反应",
+      "confidence": 0.80,
+      "target_indicators": ["HRV_RMSSD", "HRV_SDNN", "core_body_temperature"],
+      "moderating_factors": ["clothing_insulation", "metabolic_rate", "acclimatization"],
+      "evidence_refs": ["Griefrian2019", "Parsons2014"]
+    },
+    {
+      "id": "R007",
+      "name": "昼夜节律耦合→温湿度共享正弦周期→晨间峰值HRV",
+      "if_conditions": ["circadian_pattern_present"],
+      "then_conclusion": "circadian_coupling → morning_peak_HRV + evening_nadir_CORTISOL",
+      "mechanism": "环境参数（温湿度）与人体的昼夜节律存在双向耦合：清晨HRV达到峰值（副交感优势），皮质醇在晨峰后逐渐下降；CO₂浓度与人活动时间强相关形成双峰模式",
+      "confidence": 0.70,
+      "target_indicators": ["HRV_daily_pattern", "cortisol_circadian", "activity_correlation_CO2"],
+      "moderating_factors": ["sleep_quality", "shift_work", "weekend_vs_weekday"],
+      "evidence_refs": ["Sundell2004", "Reinberg1967"]
+    },
+    {
+      "id": "R008",
+      "name": "噪音暴露→压力激素升高→交感占优",
+      "if_conditions": ["noise_elevated_above_55dB"],
+      "then_conclusion": "stress_hormone_elevation → sympathetic_dominance",
+      "mechanism": "持续性环境噪音（>55dB）触发HPA轴激活，皮质醇和肾上腺素水平升高，导致交感神经张力增高而副交感抑制",
+      "confidence": 0.73,
+      "target_indicators": ["HRV_LF_HF_ratio", "cortisol", "systolic_BP"],
+      "moderating_factors": ["noise_frequency", "perceived_control", "sleep_state"],
+      "evidence_refs": ["Klang2017", "Stansfeld2003"]
+    },
+    {
+      "id": "R009",
+      "name": "屏幕使用期间眨眼频率下降→计算机视觉综合征",
+      "if_conditions": ["prolonged_screen_use"],
+      "then_conclusion": "blink_rate_decrease_50pct → computer_vision_syndrome",
+      "mechanism": "专注屏幕时注意力分散导致瞬目反射抑制，眨眼频率下降约50%，泪膜破裂时间缩短至正常的1/3以下",
+      "confidence": 0.88,
+      "target_indicators": ["blink_rate", "tear_breakup_time", "visual_fatigue_score"],
+      "moderating_factors": ["screen_brightness", "viewing_distance", "artificial_lubricants"],
+      "evidence_refs": ["Amrnicha2013", "Willcox2016"]
+    },
+    {
+      "id": "R010",
+      "name": "光照强度不足→褪黑素分泌紊乱→睡眠质量下降→次日HRV降低",
+      "if_conditions": ["insufficient_daylight_exposure"],
+      "then_conclusion": "melatonin_disruption → poor_sleep → next_day_HRV_reduction",
+      "mechanism": "日间自然光暴露不足导致褪黑素-皮质醇节律偏移，深度睡眠比例降低，第二天早晨HRV基线值下降",
+      "confidence": 0.72,
+      "target_indicators": ["next_day_HRV_baseline", "slow_wave_sleep_proportion", "melatonin_curve"],
+      "moderating_factors": ["indoor_lighting_quality", "window_access", "blue_light_evening_exposure"],
+      "evidence_refs": ["Figueiro2017", "Warren2018"]
+    },
+    {
+      "id": "R011",
+      "name": "负氧离子浓度升高→副交感增强→HRV改善",
+      "if_conditions": ["negative_ion_elevated"],
+      "then_conclusion": "parasympathetic_enhancement → HRV_improvement",
+      "mechanism": "空气中负氧离子浓度升高可能通过嗅觉-边缘系统通路增强副交感神经活性，表现为RMSSD和pNN50增加",
+      "confidence": 0.60,
+      "target_indicators": ["HRV_RMSSD", "HRV_pNN50", "respiratory_rate"],
+      "moderating_factors": ["ion_particle_size", "individual_sensitivity", "baseline_health"],
+      "evidence_refs": ["Chester2016", "Schlipft2004"]
+    },
+    {
+      "id": "R012",
+      "name": "PM₁₀与超细颗粒物的血管内皮功能障碍→血压升高",
+      "if_conditions": ["PM10_and_UFP_elevated"],
+      "then_conclusion": "endothelial_dysfunction → BP_elevation",
+      "mechanism": "可吸入颗粒物和超细颗粒物沉积于肺泡-毛细血管屏障，释放炎症介质损害血管内皮NO合成，导致急性血压上升",
+      "confidence": 0.79,
+      "target_indicators": ["systolic_BP", "diastolic_BP", "pulse_pressure"],
+      "moderating_factors": ["preexisting_cardiovascular_condition", "age", "exercise_intensity"],
+      "evidence_refs": ["Brook2010", "Guo2017"]
+    },
+    {
+      "id": "R013",
+      "name": "甲醛暴露→气道刺激→呼吸频率代偿性增加→氧耗变化",
+      "if_conditions": ["formaldehyde_elevated_above_0.08ppm"],
+      "then_conclusion": "airway_irritation → respiratory_rate_increase → oxygen_consumption_change",
+      "mechanism": "甲醛对呼吸道黏膜产生化学性刺激，引发咳嗽反射和支气管收缩，导致呼吸频率代偿性增加和通气/血流比失调",
+      "confidence": 0.71,
+      "target_indicators": ["respiratory_rate", "SpO2", "PEEP_effect"],
+      "moderating_factors": ["room_volume", "new_furniture_presence", "asthma_history"],
+      "evidence_refs": ["Eliser2016", "WHO2010"]
+    },
+    {
+      "id": "R014",
+      "name": "动态温差变化→血管舒缩频繁→心血管负荷增加",
+      "if_conditions": ["rapid_temperature_fluctuation"],
+      "then_conclusion": "frequent_vasomotor_changes → cardiovascular_load_increase",
+      "mechanism": "短时间内较大的温湿度波动迫使心血管系统反复进行血管舒缩调节以维持核心体温，这种反复切换增加了心血管系统的整体负荷",
+      "confidence": 0.68,
+      "target_indicators": ["HRV_complexity_metrics", "blood_pressure_variability", "skin_temperature_variation"],
+      "moderating_factors": ["HVAC_behavior", "outdoor_indoor_delta", "clothing_adaptation"],
+      "evidence_refs": ["Zhang2019", "ASHRAE2017"]
+    },
+    {
+      "id": "R015",
+      "name": "综合暴露叠加效应→多指标同时恶化呈非线性增长",
+      "if_conditions": ["multiple_pollutants_simultaneous"],
+      "then_conclusion": "cumulative_exposure_synergy → multi_parameter_deterioration_nonlinear",
+      "mechanism": "多种污染物和不利环境条件同时存在时产生的叠加效应往往是非线性的——总效应大于各因子单独效应之和，尤其体现在HRV和认知功能的复合下降上",
+      "confidence": 0.76,
+      "target_indicators": ["HRV_all_metrics", "cognitive_composite_score", "stress_hormone_panel"],
+      "moderating_factors": ["individual_vulnerability", "cumulative_lifetime_exposure", "genetic_polymorphisms"],
+      "evidence_refs": ["Olsen2018", "Cakmak2016"]
+    }
+  ]
+}

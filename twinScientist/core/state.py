@@ -185,8 +185,9 @@ class AgentState(TypedDict, total=False):
     # L3: Semantic Memory (Knowledge Graph + Vector)
     # ============================================================
     knowledge_graph: dict               # NetworkX graph (raw) + serializable nodes/edges
-    fact_extraction: list[dict]         # 从文献中提取的关键事实
+    fact_extraction: list[dict]         # 从文献中提取的关键事实（每条含 _verified/_verification_method）
     literature_summary: str             # 领域文献综述摘要
+    _literature_sources: list[str]      # 数据来源标记 ["crossref", "arxiv", "semantic_scholar"]
 
     # ============================================================
     # L4-L5: Evidence Chain & Anomaly Graph
@@ -199,6 +200,20 @@ class AgentState(TypedDict, total=False):
     # ============================================================
     hypothesis_tree: list[dict]         # 动态假设树根节点列表（直接替换）
     elimination_records: list[dict]     # 淘汰赛记录：{round, pair, winner_id, loser_id, reason}
+    _logic_engine_stats: dict | None    # LogicEngine 统计信息 {"inductive_count", "deductive_count", ...}
+    _logic_consistency_reports: list[dict]  # 假设间逻辑一致性检查结果
+    transfer_proposals: list[dict]          # 跨学科技术迁移提案
+    methodology_convergence: str            # "stable" | "shifting" | "improving"
+    evidence_dimension_coverage: list[str]  # ["literature", "statistical", "causal"]
+    hypothesis_space_size: int              # 当前活跃假设数量
+
+    # ============================================================
+    # Debate & Chat Integration
+    # ============================================================
+    debate_history: list[dict]           # 辩论轮次记录 [{round_number, pro_output, con_output, judge_score_before, ...}]
+    user_chat_messages: list[dict]       # 用户对话消息历史 [{id, role, content, created_at}]
+    educational_annotations: list[dict]  # 教学注释 [{action, explanation, timestamp}]
+    user_guidance: str | None            # 用户在任意轮次输入的方向性指令
 
     # ============================================================
     # Orchestrator Runtime State

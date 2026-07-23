@@ -230,13 +230,12 @@ def _check_orchestrator_stop_conditions(state: AgentState) -> dict:
     else:
         latest_review_score = 0
 
-    # --- Condition 2: 检查本轮证据强度 > 0.85 且评审得分 > 80 ---
-    if avg_evidence_strength > 0.85 and latest_review_score > 80:
+    # --- Condition 2: 检查本轮证据强度 > 0.85（不依赖 LLM 评审分，只看客观因果证据）---
+    if avg_evidence_strength > 0.85:
         result["evidence_strong"] = True
         result["stop"] = True
         result["reason"] = (
-            f"证据强度充足 (avg_strength={avg_evidence_strength:.3f}, "
-            f"latest_score={latest_review_score}/100)，结论明确可终止"
+            f"证据强度充足 (avg_strength={avg_evidence_strength:.3f})，因果推断结论明确可终止"
         )
         logger.info(f"[OrchestratorStop] EVIDENCE_STRONG: {result['reason']}")
         return result

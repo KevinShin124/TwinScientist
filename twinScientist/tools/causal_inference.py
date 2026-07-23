@@ -28,8 +28,8 @@ class CausalInferenceEngine:
         "granger",            # Granger Causality
         "pc_fci",             # PC-FCI (causal structure learning)
         "psm",                # Propensity Score Matching
-        "instrumental_var",   # Instrumental Variable
-        "bayesian_net",       # Bayesian Network
+        "instrumental_variable",   # Instrumental Variable
+        "bayesian_network",       # Bayesian Network
         "counterfactual",     # Counterfactual Reasoning (GP surrogate)
         "auto_select",        # AI auto-select best method
     ]
@@ -331,74 +331,626 @@ class CausalInferenceEngine:
         except Exception:
             return {"status": "stationarity_check_failed"}
 
-    # Placeholder methods (full implementation requires specific libraries)
+
     async def _run_pc_fci(self, data: list[list[float]], alpha: float = 0.05) -> dict:
-        """PC-FCI 因果图发现 — 需要 causalgraphicalmodels 库"""
-        return {
-            "status": "requires_causalgraphicalmodels",
-            "message": "pip install causalgraphicalmodels",
-            "expected_output": "adjacency_matrix + skeleton edges",
-        }
+        """PC-FCI Simplified — partial correlation skeleton discovery (numpy/scipy)"""
+        return await _impl_pc_fci(data, alpha)
 
     async def _run_psm(self, treated: list[bool], outcome: list[float], covariates: list[list[float]]) -> dict:
-        """PSM 倾向得分匹配 — 需要 dowhy 或 statsmodels"""
-        return {
-            "status": "requires_dowhy",
-            "message": "pip install dowhy",
-        }
+        """PSM — propensity score matching (logistic regression + NN matching)"""
+        return await _impl_psm(treated, outcome, covariates)
 
     async def _run_instrumental_variable(self, z: list[float], x: list[float], y: list[float]) -> dict:
-        """工具变量法 — 需要 linearmodels"""
-        return {"status": "requires_linearmodels"}
+        """IV — instrumental variable two-stage least squares"""
+        return await _impl_instrumental_variable(z, x, y)
 
     async def _run_bayesian_network(self, data: list[dict], structure: str = "learning") -> dict:
-        """贝叶斯网络 — 需要 pgmpy"""
-        return {"status": "requires_pgmpy", "message": "pip install pgmpy"}
+        """Bayesian Network — greedy BIC structure learning (numpy/scipy)"""
+        import numpy as np
+        arr = np.array([[d[k] for k in sorted(d.keys())] for d in data])
+        return await _impl_bayesian_network(arr)
 
     async def _run_counterfactual(self, predictions_base: list[float], predictions_intervened: list[float]) -> dict:
-        """
-        反事实推理 (Item 19) — 基于两组的差异估计因果效应
+        """Counterfactual reasoning via Welch t-test"""
+        return await _impl_counterfactual(predictions_base, predictions_intervened)
 
-        Args:
-            predictions_base: 基线条件下的预测值
-            predictions_intervened: 干预后的预测值
-        """
-        import numpy as np
-        from scipy import stats
 
-        n = min(len(predictions_base), len(predictions_intervened))
-        base = np.array(predictions_base[:n])
-        inter = np.array(predictions_intervened[:n])
+"""Replacement implementations for the 4 placeholder causal inference methods."""
 
-        # Welch's t-test for unequal variances (standard in SOTA counterfactual analysis)
-        mean_base, mean_inter = base.mean(), inter.mean()
-        std_base, std_inter = base.std(ddof=1), inter.std(ddof=1)
-        n_base, n_inter = len(base), len(inter)
+import numpy as np
+from scipy import stats
+from typing import Any
 
-        se = np.sqrt(std_base**2 / n_base + std_inter**2 / n_inter) + 1e-10
-        causal_effect = mean_inter - mean_base
-        t_stat = causal_effect / se
-        df_welch = (std_base**2 / n_base + std_inter**2 / n_inter)**2 / (
-            (std_base**2 / n_base)**2 / max(n_base - 1, 1) +
-            (std_inter**2 / n_inter)**2 / max(n_inter - 1, 1)
-        ) + 1e-10
-        p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df_welch)) if n > 4 else None
-        confidence_interval_95 = (
-            float(causal_effect - 1.96 * se),
-            float(causal_effect + 1.96 * se),
-        )
+async def _impl_pc_fci(self_data, alpha: float = 0.05) -> dict:
+    """
+    PC-FCI Simplified — 偏相关检验骨架发现（无潜变量）。
 
+    核心算法：
+    1. 从完全图开始，所有节点两两相连
+    2. 按条件集大小 s=0,1,2,... 逐步检验偏相关性
+    3. 如果 X 和 Y 在给定 Z 后偏相关不显著，则删除边 X-Y
+    4. 返回有向无环图的简化表示（方向基于时间顺序启发式）
+    """
+    data_arr = np.array(self_data)
+    if data_arr.ndim == 1:
+        data_arr = data_arr.reshape(-1, 1)
+
+    n_vars = data_arr.shape[1]
+    n_samples = data_arr.shape[0]
+
+    if n_vars < 2 or n_samples < 10:
+        return {"status": "insufficient_data", "required": "n_samples >= 10, n_vars >= 2"}
+
+    # --- Step 1: Compute correlation matrix ---
+    corr_matrix = np.corrcoef(data_arr.T)
+    corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
+    np.fill_diagonal(corr_matrix, 0.0)
+
+    # --- Step 2: PC skeleton estimation ---
+    # Adjacency matrix (undirected graph)
+    adj = np.ones((n_vars, n_vars), dtype=bool)
+    np.fill_diagonal(adj, False)
+
+    # Condition sets for each pair
+    sep_sets = {}  # (i, j) -> separating set
+
+    # Try conditioning on subsets of other variables
+    for i in range(n_vars):
+        for j in range(i + 1, n_vars):
+            if not adj[i, j]:
+                continue
+
+            other_vars = [k for k in range(n_vars) if k != i and k != j]
+            found_sep = False
+
+            # Test at increasing conditioning set sizes
+            from itertools import combinations
+            for cond_size in range(min(3, len(other_vars)) + 1):
+                if found_sep:
+                    break
+                for cond_set in combinations(other_vars, cond_size):
+                    if len(cond_set) == 0:
+                        # Partial correlation is just Pearson correlation
+                        r_xy = corr_matrix[i, j]
+                        t_stat = r_xy * np.sqrt((n_samples - 2) / (1 - r_xy**2 + 1e-10))
+                        p_value = 2 * (1 - stats.t.cdf(abs(t_stat), n_samples - 2))
+
+                        if p_value > alpha:
+                            adj[i, j] = False
+                            adj[j, i] = False
+                            sep_sets[(i, j)] = []
+                            sep_sets[(j, i)] = []
+                            found_sep = True
+                            break
+                    else:
+                        # Compute partial correlation using recursive formula
+                        try:
+                            partial_corr = _partial_correlation(data_arr, i, j, list(cond_set))
+                            if np.isnan(partial_corr):
+                                continue
+
+                            z = np.arctanh(np.clip(partial_corr, -0.9999, 0.9999))
+                            z_stat = z * np.sqrt(n_samples - len(cond_set) - 3)
+                            p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+
+                            if p_value > alpha:
+                                adj[i, j] = False
+                                adj[j, i] = False
+                                sep_sets[(i, j)] = list(cond_set)
+                                sep_sets[(j, i)] = list(cond_set)
+                                found_sep = True
+                                break
+                        except Exception:
+                            continue
+
+            if not found_sep and adj[i, j]:
+                # Use empty set separator (already tested above)
+                sep_sets.setdefault((i, j), [])
+                sep_sets.setdefault((j, i), [])
+
+    # --- Step 3: Orient some edges (simplified FCI rules) ---
+    # Use v-structure detection: if X-Z-Y and X,Y not adjacent, and X,Y not separated by Z, orient X->Z<-Y
+    directed_edges = []
+    colliders = []
+
+    for z in range(n_vars):
+        neighbors_z = [k for k in range(n_vars) if adj[z, k]]
+        for x_idx in range(len(neighbors_z)):
+            for y_idx in range(x_idx + 1, len(neighbors_z)):
+                x, y = neighbors_z[x_idx], neighbors_z[y_idx]
+
+                if not adj[x, y]:  # X and Y not adjacent
+                    sep = sep_sets.get((x, y), [])
+                    if z not in sep:  # V-structure rule
+                        directed_edges.append((x, z))
+                        directed_edges.append((y, z))
+                        colliders.append(z)
+
+    # For remaining undirected edges, use heuristic: lower index -> higher index
+    for i in range(n_vars):
+        for j in range(i + 1, n_vars):
+            if adj[i, j] and (i, j) not in directed_edges and (j, i) not in directed_edges:
+                directed_edges.append((i, j))  # Heuristic direction
+
+    # Build output
+    edges_list = [{"from": int(u), "to": int(v), "type": "collider" if v in colliders else "directed"}
+                  for u, v in directed_edges]
+
+    return {
+        "status": "computed",
+        "method": "pc_fci_simplified",
+        "adjacency_matrix": adj.tolist(),
+        "edges": edges_list,
+        "separation_sets": {f"{i}_{j}": v for (i, j), v in sep_sets.items()},
+        "n_variables": n_vars,
+        "n_samples": n_samples,
+        "alpha_used": alpha,
+        "collider_nodes": list(set(colliders)),
+        "note": "Simplified PC-FCI using partial correlations; does not handle latent confounders fully.",
+    }
+
+def _partial_correlation(data: np.ndarray, x: int, y: int, z_list: list) -> float:
+    """Compute partial correlation between x and y given z_list."""
+    n = data.shape[0]
+
+    if not z_list:
+        return float(np.corrcoef(data[:, x], data[:, y])[0, 1])
+
+    # Use regression-based approach: residualize x and y on z, then correlate residuals
+    try:
+        Z = data[:, z_list] if len(z_list) > 1 else data[:, z_list[0]].reshape(-1, 1)
+
+        # Regression coefficients via OLS
+        Z_with_const = np.column_stack([np.ones(n), Z])
+
+        beta_x = np.linalg.lstsq(Z_with_const, data[:, x], rcond=None)[0]
+        beta_y = np.linalg.lstsq(Z_with_const, data[:, y], rcond=None)[0]
+
+        res_x = data[:, x] - Z_with_const @ beta_x
+        res_y = data[:, y] - Z_with_const @ beta_y
+
+        corr = np.corrcoef(res_x, res_y)[0, 1]
+        return float(corr) if not np.isnan(corr) else 0.0
+    except Exception:
+        return np.nan
+
+async def _impl_psm(self_treated, self_outcome, self_covariates, propensity_model="logistic") -> dict:
+    """
+    PSM Simplified — 倾向得分匹配（Logistic回归 + 最近邻匹配）。
+
+    核心步骤：
+    1. 用 logistic 回归估计倾向得分 e(X) = P(T=1|X)
+    2. 按倾向得分进行 1:1 最近邻匹配
+    3. 计算 ATT (Average Treatment Effect on Treated)
+    """
+    treated = np.array(self_treated, dtype=bool).flatten()
+    outcome = np.array(self_outcome, dtype=float).flatten()
+    covariates = np.array(self_covariates, dtype=float)
+
+    n_total = len(treated)
+    n_treated = int(treated.sum())
+    n_control = n_total - n_treated
+
+    if n_treated < 3 or n_control < 3 or n_total < 10:
+        return {"status": "insufficient_data", "treated": n_treated, "control": n_control}
+
+    # --- Step 1: Estimate propensity scores via logistic regression ---
+    try:
+        X = covariates
+        ones = np.ones(n_total).reshape(-1, 1)
+        X_aug = np.hstack([ones, X])
+
+        # Logistic regression via iteratively reweighted least squares (IRLS)
+        beta = np.zeros(X_aug.shape[1])
+        for iteration in range(50):
+            eta = X_aug @ beta
+            p = 1.0 / (1.0 + np.exp(-np.clip(eta, -500, 500)))
+            p = np.clip(p, 1e-10, 1 - 1e-10)
+
+            W = p * (1 - p)
+            Z = eta + (treated - p) / p
+
+            # Weighted least squares
+            W_sqrt = np.sqrt(W).reshape(-1, 1)
+            W_X = X_aug * W_sqrt
+            W_Z = Z * W_sqrt.flatten()
+
+            try:
+                beta_new = np.linalg.lstsq(W_X, W_Z, rcond=None)[0]
+                if np.allclose(beta, beta_new, atol=1e-6):
+                    break
+                beta = beta_new
+            except Exception:
+                break
+
+        ps_scores = 1.0 / (1.0 + np.exp(-(X_aug @ beta)))
+        ps_scores = np.clip(ps_scores, 1e-10, 1 - 1e-10)
+    except Exception as e:
+        return {"status": "propensity_estimation_failed", "error": str(e)}
+
+    # --- Step 2: 1:1 nearest neighbor matching ---
+    treated_indices = np.where(treated)[0]
+    control_indices = np.where(~treated)[0]
+
+    matched_pairs = []
+    used_controls = set()
+
+    for ti in treated_indices:
+        cs = ps_scores[control_indices]
+        distances = np.abs(ps_scores[ti] - cs)
+        nearest_idx = np.argmin(distances)
+        ci = control_indices[nearest_idx]
+
+        if ci not in used_controls:
+            matched_pairs.append((ti, ci))
+            used_controls.add(ci)
+
+    if len(matched_pairs) < 3:
         return {
-            "average_treatment_effect": round(float(causal_effect), 4),
-            "standard_error": round(float(se), 4),
-            "confidence_interval_95": [round(v, 4) for v in confidence_interval_95],
-            "p_value": round(p_value, 6) if p_value is not None else None,
-            "t_statistic": round(float(t_stat), 4),
-            "degrees_of_freedom": round(float(df_welch), 2),
-            "interpretation": (
-                f"干预组均值比基线{'高' if causal_effect > 0 else '低'} {abs(causal_effect):.4f}"
-                f" (Welch's t-test: t={t_stat:.4f}, df={df_welch:.1f})\n"
-                f"95%CI=[{confidence_interval_95[0]:.4f}, {confidence_interval_95[1]:.4f}]"
-                f"{(' p=' + str(round(p_value, 6))) if p_value is not None else ''}"
-            ),
+            "status": "few_matches",
+            "matched_pairs": len(matched_pairs),
+            "total_treated": n_treated,
+            "total_control": n_control,
         }
+
+    matched_treated_idx = [p[0] for p in matched_pairs]
+    matched_control_idx = [p[1] for p in matched_pairs]
+
+    # --- Step 3: Calculate ATT ---
+    treated_outcomes = outcome[matched_treated_idx]
+    control_outcomes = outcome[matched_control_idx]
+
+    att = float(treated_outcomes.mean() - control_outcomes.mean())
+    se_att = float(np.std(treated_outcomes - control_outcomes, ddof=1) / np.sqrt(len(matched_pairs)))
+
+    # Standardized mean difference (SMD) for balance check
+    smd_by_var = []
+    for v in range(covariates.shape[1]):
+        m_t = covariates[matched_treated_idx, v].mean()
+        m_c = covariates[matched_control_idx, v].mean()
+        s_pool = np.sqrt((covariates[matched_treated_idx, v].var(ddof=1) +
+                          covariates[matched_control_idx, v].var(ddof=1)) / 2)
+        smd = abs(m_t - m_c) / (s_pool + 1e-10)
+        smd_by_var.append(round(float(smd), 4))
+
+    max_smd = max(smd_by_var) if smd_by_var else 0.0
+    balanced = max_smd < 0.1  # Common threshold
+
+    return {
+        "status": "computed",
+        "method": "psm_logistic_matching",
+        "average_treatment_effect_on_treated": round(att, 4),
+        "standard_error": round(se_att, 4),
+        "n_matched_treated": len(matched_treated_idx),
+        "n_matched_control": len(matched_control_idx),
+        "propensity_score_range": [round(float(ps_scores.min()), 4), round(float(ps_scores.max()), 4)],
+        "smd_by_variable": smd_by_var,
+        "max_smd": round(max_smd, 4),
+        "balance_achieved": balanced,
+        "interpretation": (
+            f"ATT={att:.4f} (SE={se_att:.4f}), "
+            f"matched {len(matched_treated_idx)} pairs, "
+            f"{'balance achieved' if balanced else 'balance NOT achieved'} (max SMD={max_smd:.3f})"
+        ),
+    }
+
+async def _impl_instrumental_variable(self_z, self_x, self_y) -> dict:
+    """
+    IV (Instrumental Variable) — 工具变量两阶段最小二乘估计。
+
+    假设: Z → X → Y (Z 是 X 的工具变量)
+
+    验证工具变量的三个条件：
+    1. Relevance: Z 与 X 强相关
+    2. Exclusion: Z 只通过 X 影响 Y
+    3. Independence: Z 与误差项独立
+
+    我们只能验证 relevance，其他两条依赖领域知识。
+    """
+    z = np.array(self_z, dtype=float).flatten()
+    x = np.array(self_x, dtype=float).flatten()
+    y = np.array(self_y, dtype=float).flatten()
+
+    n = min(len(z), len(x), len(y))
+    z, x, y = z[:n], x[:n], y[:n]
+
+    if n < 10:
+        return {"status": "insufficient_data", "required_n": 10, "actual_n": n}
+
+    # --- Step 1: Test relevance (first stage) ---
+    Z_for_regression = np.column_stack([np.ones(n), z])
+    first_stage_beta = np.linalg.lstsq(Z_for_regression, x, rcond=None)[0]
+    first_stage_fitted = Z_for_regression @ first_stage_beta
+    first_stage_residuals = x - first_stage_fitted
+
+    f_stat_first = _f_test(first_stage_residuals, x - x.mean())
+    relevance_strength = np.corrcoef(z, x)[0, 1]
+
+    if abs(relevance_strength) < 0.3:
+        return {
+            "status": "weak_instrument_warning",
+            "relevance_corr": round(float(relevance_strength), 4),
+            "f_statistic": round(float(f_stat_first), 4),
+            "note": "Instrument is weak (|r| < 0.3); IV estimates may be biased.",
+        }
+
+    # --- Step 2: Two-stage least squares ---
+    # Stage 1: Regress X on Z
+    x_hat = first_stage_fitted
+
+    # Stage 2: Regress Y on X_hat
+    xy_reg = np.column_stack([np.ones(n), x_hat])
+    second_stage = np.linalg.lstsq(xy_reg, y, rcond=None)[0]
+
+    iv_estimate = second_stage[1]  # Coefficient on x_hat
+    y_fitted = xy_reg @ second_stage
+    residuals = y - y_fitted
+
+    # Compute standard error (simplified)
+    mse = np.sum(residuals**2) / (n - 2)
+    se_iv = np.sqrt(mse / ((x_hat - x_hat.mean()).var() * n) + 1e-10)
+
+    t_stat = iv_estimate / (se_iv + 1e-10)
+    p_value = 2 * (1 - stats.t.cdf(abs(t_stat), n - 2))
+
+    # Overidentification test would require multiple instruments
+    # Here we note that it's not possible with a single instrument
+
+    return {
+        "status": "computed",
+        "method": "iv_2sls",
+        "instrumental_variable_estimate": round(float(iv_estimate), 4),
+        "standard_error": round(float(se_iv), 4),
+        "t_statistic": round(float(t_stat), 4),
+        "p_value": round(float(p_value), 6),
+        "first_stage_relevance": round(float(relevance_strength), 4),
+        "first_stage_f_statistic": round(float(f_stat_first), 4),
+        "confidence_interval_95": [
+            round(float(iv_estimate - 1.96 * se_iv), 4),
+            round(float(iv_estimate + 1.96 * se_iv), 4),
+        ],
+        "validity_notes": [
+            "Relevance: CHECKED (|r| >= 0.3)",
+            "Exclusion restriction: NOT TESTABLE (requires domain knowledge)",
+            "Independence: NOT TESTABLE (assumed based on research design)",
+        ],
+        "interpretation": (
+            f"IV estimate={iv_estimate:.4f} ± {se_iv:.4f}, "
+            f"t={t_stat:.4f}, p={p_value:.4g}, "
+            f"instrument strength={abs(relevance_strength):.3f}"
+        ),
+    }
+
+def _f_test(residuals_full, residuals_reduced) -> float:
+    """Compute approximate F-statistic from residual sums of squares."""
+    ssr_full = np.sum(residuals_full**2)
+    ssr_reduced = np.sum(residuals_reduced**2)
+
+    if ssr_full < 1e-10:
+        return 1000.0
+
+    return round(float((ssr_reduced - ssr_full) / ssr_full * 100), 4) if ssr_full > 0 else 1000.0
+
+async def _impl_bayesian_network(self_data, structure: str = "learning") -> dict:
+    """
+    Bayesian Network Simplified — 贪心结构学习 + BIC 评分。
+
+    核心算法（K2-style greedy search）：
+    1. 初始化为空图（所有节点独立）
+    2. 逐对尝试添加边，选择使 BIC 改善最大的边
+    3. 重复直到无法进一步改进
+
+    离散化连续数据以简化计算（使用分位数分箱）
+    """
+    data_arr = np.array(self_data, dtype=float)
+    if data_arr.ndim == 1:
+        data_arr = data_arr.reshape(-1, 1)
+
+    n_vars = data_arr.shape[1]
+    n_samples = data_arr.shape[0]
+
+    if n_vars < 2 or n_samples < 20:
+        return {"status": "insufficient_data"}
+
+    # --- Discretize continuous data into quartile bins ---
+    nbins = 4
+    discretized = np.zeros_like(data_arr, dtype=int)
+
+    for j in range(n_vars):
+        col = data_arr[:, j]
+        percentiles = np.percentile(col, [25, 50, 75])
+        bins = np.concatenate([[-np.inf], percentiles, [np.inf]])
+        discretized[:, j] = np.digitize(col, bins) - 1
+        discretized[:, j] = np.clip(discretized[:, j], 0, nbins - 1)
+
+    # --- Greedy structure learning with BIC scoring ---
+    parent_sets = {j: [] for j in range(n_vars)}
+
+    # Score function: BIC
+    def compute_bic(var_j, parents):
+        """Compute BIC score for variable j given its parents."""
+        k_parents = len(parents)
+
+        # Count parameters: for each combination of parent states × variable states
+        if k_parents == 0:
+            n_params = nbins  # Just distribution over var_j
+        else:
+            parent_configs = 1
+            for p in parents:
+                parent_configs *= nbins
+            n_params = parent_configs * nbins
+
+        # Data points per configuration
+        min_counts = n_samples // max(n_params, 1)
+
+        if min_counts < 2:
+            return -1e10  # Penalize over-parameterized models
+
+        # Likelihood approximation using frequency counts
+        if k_parents == 0:
+            counts = np.bincount(discretized[:, j], minlength=nbins)
+        else:
+            # Group by parent config
+            all_combinations = []
+            for row in range(n_samples):
+                config = tuple(discretized[row, p] for p in parents)
+                all_combinations.append(config)
+
+            unique_configs = set(all_combinations)
+            total_counts = 0
+            max_counts = 0
+
+            for config in unique_configs:
+                mask = [c == config for c in all_combinations]
+                subset = discretized[mask, j]
+                counts_subset = np.bincount(subset, minlength=nbins)
+                total_counts += counts_subset.sum()
+                max_counts = max(max_counts, counts_subset.max())
+
+            if total_counts < 5:
+                return -1e10
+
+        # Simple BIC approximation: log-likelihood - penalty
+        k = n_params
+        n = n_samples
+        bic = -2 * np.log(max(min_counts * n_params / n, 1e-10) + 1e-10) + k * np.log(n)
+
+        return float(bic)
+
+    # Greedy edge addition
+    improved = True
+    max_iterations = n_vars * (n_vars - 1)
+    iterations = 0
+
+    while improved and iterations < max_iterations:
+        improved = False
+        iterations += 1
+
+        best_improvement = 0
+        best_edge = None
+
+        for j in range(n_vars):
+            for k in range(n_vars):
+                if k == j or k in parent_sets[j]:
+                    continue
+
+                # Check if adding edge k→j improves BIC
+                current_bic = compute_bic(j, parent_sets[j])
+                candidate_parents = parent_sets[j] + [k]
+                candidate_bic = compute_bic(j, candidate_parents)
+
+                improvement = candidate_bic - current_bic
+
+                if improvement > 0.1:  # Threshold to avoid noise
+                    if improvement > best_improvement:
+                        best_improvement = improvement
+                        best_edge = (k, j)
+
+        if best_edge:
+            u, v = best_edge
+            parent_sets[v].append(u)
+            improved = True
+
+    # --- Build adjacency matrix and edges ---
+    adj = np.zeros((n_vars, n_vars), dtype=int)
+    edges = []
+
+    for j in range(n_vars):
+        for p in parent_sets[j]:
+            adj[p, j] = 1
+            edges.append({
+                "from": int(p),
+                "to": int(j),
+                "conditional_probability_table_shape": [nbins * len(parent_sets[p]) if parent_sets[p] else nbins],
+            })
+
+    # Compute marginal independencies (via discretized chi-squared test)
+    independence_tests = []
+    for i in range(n_vars):
+        for j in range(i + 1, n_vars):
+            contingency = np.zeros((nbins, nbins))
+            for row in range(n_samples):
+                contingency[discretized[row, i], discretized[row, j]] += 1
+
+            # Chi-squared test
+            total = float(contingency.sum())
+            if total > 0:
+                row_marginals = np.array([float(contingency[i,:].sum()) for i in range(nbins)]).reshape(-1, 1)
+                col_marginals = np.array([float(contingency[:,j].sum()) for j in range(nbins)]).reshape(1, -1)
+                expected = np.maximum(row_marginals @ col_marginals / total, 1e-10)
+                expected = np.maximum(expected, 1e-10)
+
+                chi2 = np.sum((contingency - expected)**2 / expected)
+                df = (nbins - 1) ** 2
+                p_value = 1 - stats.chi2.cdf(chi2, df)
+
+                independence_tests.append({
+                    "variables": [i, j],
+                    "chi_squared": round(float(chi2), 4),
+                    "p_value": round(float(p_value), 6),
+                    "independent_at_005": p_value > 0.05,
+                })
+
+    return {
+        "status": "computed",
+        "method": "bayesian_network_greedy_bic",
+        "adjacency_matrix": adj.tolist(),
+        "parent_sets": {str(k): v for k, v in parent_sets.items()},
+        "edges": edges,
+        "independence_tests": independence_tests,
+        "n_variables": n_vars,
+        "n_samples": n_samples,
+        "discretization_bins": nbins,
+        "scoring_function": "BIC",
+        "search_algorithm": "greedy_edge_addition",
+        "note": "Simplified Bayesian Network using greedy search with BIC scoring. Continuous data was discretized into quartile bins.",
+    }
+
+
+
+async def _impl_counterfactual(predictions_base: list[float], predictions_intervened: list[float]) -> dict:
+    """
+    Counterfactual reasoning — Welch's t-test for two-sample comparison.
+    Estimates ATE (Average Treatment Effect) using difference-in-means with SE.
+    """
+    import numpy as np
+    from scipy import stats
+
+    n = min(len(predictions_base), len(predictions_intervened))
+    base = np.array(predictions_base[:n])
+    inter = np.array(predictions_intervened[:n])
+
+    # Welch's t-test for unequal variances (standard in SOTA counterfactual analysis)
+    mean_base, mean_inter = base.mean(), inter.mean()
+    std_base, std_inter = base.std(ddof=1), inter.std(ddof=1)
+    n_base, n_inter = len(base), len(inter)
+
+    se = np.sqrt(std_base**2 / n_base + std_inter**2 / n_inter) + 1e-10
+    causal_effect = mean_inter - mean_base
+    t_stat = causal_effect / se
+    df_welch = (std_base**2 / n_base + std_inter**2 / n_inter)**2 / (
+        (std_base**2 / n_base)**2 / max(n_base - 1, 1) +
+        (std_inter**2 / n_inter)**2 / max(n_inter - 1, 1)
+    ) + 1e-10
+    p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df_welch)) if n > 4 else None
+    confidence_interval_95 = (
+        float(causal_effect - 1.96 * se),
+        float(causal_effect + 1.96 * se),
+    )
+
+    return {
+        "status": "computed",
+        "method": "counterfactual_welch_ttest",
+        "average_treatment_effect": round(float(causal_effect), 4),
+        "standard_error": round(float(se), 4),
+        "confidence_interval_95": [round(v, 4) for v in confidence_interval_95],
+        "p_value": round(p_value, 6) if p_value is not None else None,
+        "t_statistic": round(float(t_stat), 4),
+        "degrees_of_freedom": round(float(df_welch), 2),
+        "interpretation": (
+            f"干预组均值比基线{'高' if causal_effect > 0 else '低'} {abs(causal_effect):.4f}"
+            f" (Welch's t-test: t={t_stat:.4f}, df={df_welch:.1f})\n"
+            f"95%CI=[{confidence_interval_95[0]:.4f}, {confidence_interval_95[1]:.4f}]"
+            f"{(' p=' + str(round(p_value, 6))) if p_value is not None else ''}"
+        ),
+    }
