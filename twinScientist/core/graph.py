@@ -101,6 +101,7 @@ from core.nodes import (
     node_human_approval,
     node_evolution_manager,
 )
+from core.nodes_post_chat import _node_post_report_chat
 from core.debate import DebateOrchestrator
 from core.orchestrator import (
     _check_orchestrator_stop_conditions,
@@ -187,6 +188,7 @@ def build_cognitive_graph() -> "CompiledGraph":
     workflow.add_node("pi_agent_meeting", node_pi_agent_meeting)
     workflow.add_node("human_approval", node_human_approval)
     workflow.add_node("evolution_manager", node_evolution_manager)
+        workflow.add_node("post_report_chat", _node_post_report_chat)
     workflow.add_node("termination_eval", node_termination_eval)
 
     def _route_ethics(state: AgentState) -> str:
@@ -292,7 +294,30 @@ def build_cognitive_graph() -> "CompiledGraph":
     workflow.add_edge("report_writing", "pi_agent_meeting")
     workflow.add_edge("pi_agent_meeting", "human_approval")
     workflow.add_edge("human_approval", "evolution_manager")
-    workflow.add_edge("evolution_manager", END)
+    workflow.add_edge("evolution_manager", "post_report_chat")
+
+
+def _route_post_report_chat(state: AgentState) -> str:
+    """Route based on user intent after research concludes."""
+    signal = state.get("_routing_signal", "continue_chatting")
+    
+    # Direct route to previous stages when user requests re-analysis
+    if signal.startswith("loop_back_to_"):
+        target = signal.replace("loop_back_to_", "")
+        logger.info(f"[PostReportChatRouter] Looping back to {target}")
+        return target
+    
+    if signal == "end_session":
+        return "END"
+    
+    # If still chatting with no explicit end signal, stay at current node
+    # The next interrupt will pick up the user's message
+    if signal == "end_session" or "accept_and_end" in signal:
+        return "END"
+    
+    # Default: let the flow continue (eventually hits END via human path)
+    return "_next_node_or_check"
+
 
     checkpointer = MemorySaver()
 

@@ -214,6 +214,8 @@ class AgentState(TypedDict, total=False):
     user_chat_messages: list[dict]       # 用户对话消息历史 [{id, role, content, created_at}]
     educational_annotations: list[dict]  # 教学注释 [{action, explanation, timestamp}]
     user_guidance: str | None            # 用户在任意轮次输入的方向性指令
+    post_report_chat_active: bool = False  # 是否处于报告后自由对话阶段
+    _resume_message: str | None          # 用于中断恢复的用户消息（LangGraph resume_value）
 
     # ============================================================
     # Orchestrator Runtime State
