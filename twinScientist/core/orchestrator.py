@@ -700,12 +700,27 @@ def route_after_termination(state: AgentState) -> str:
         )
         if should_term:
             action = "report_writing"
+            # Reset anti-loop tracking on actual termination
+            state["_term_continue_scores"] = []
         else:
-            # MC influence: might override "continue" to "terminate" or vice versa
-            action = _mc_influence_route(
-                state, "hypothesis_generation",
-                ["hypothesis_generation", "report_writing", "termination_eval"]
-            )
+            # --- Anti-loop: detect repeated "continue" with unchanged combined_score ---
+            curr_score = term_result.get("combined_score", 0.0)
+            prev_scores: list = state.get("_term_continue_scores", [])
+            prev_scores = (prev_scores + [curr_score])[-3:]  # sliding window, keep last 3
+            state["_term_continue_scores"] = prev_scores
+
+            if len(prev_scores) >= 2 and abs(prev_scores[-1] - prev_scores[-2]) < 0.02:
+                logger.warning(
+                    f"[RouteAfterTerm] ANTI-LOOP: combined_score={curr_score:.3f} "
+                    f"unchanged across {len(prev_scores)} rounds, forcing termination"
+                )
+                action = "report_writing"
+            else:
+                # MC influence: might override "continue" to "terminate" or vice versa
+                action = _mc_influence_route(
+                    state, "hypothesis_generation",
+                    ["hypothesis_generation", "report_writing", "termination_eval"]
+                )
         _mc_log_and_recommend(state, action)
         return action
 

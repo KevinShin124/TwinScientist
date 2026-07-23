@@ -97,7 +97,7 @@ from core.nodes import (
     node_pi_agent_meeting,
     node_reviewer_agent,
     node_ethics_check,
-    node_termination_eval,
+    node_termination_eval,  # ← uses nodes.py (NOT nodes_term_patch.py)
     node_human_approval,
     node_evolution_manager,
 )
@@ -289,6 +289,9 @@ def build_cognitive_graph() -> "CompiledGraph":
             "hypothesis_generation": "hypothesis_generation",
         },
     )
+
+    # Debate → termination evaluation (mandatory — fixes missing edge bug)
+    workflow.add_edge("debate_then_terminate", "termination_eval")
 
     # Report → final stages
     workflow.add_edge("report_writing", "pi_agent_meeting")

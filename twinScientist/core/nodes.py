@@ -1761,7 +1761,8 @@ async def node_termination_eval(state: dict) -> dict:
     logger.info(f"[TerminationEval] Hyp space: {hyp_space_size} active, conf={hypo_confidence_max:.3f}, converged={hypo_converged}")
 
     # --- Combined score with bonuses ---
-    base_combined = min(convergence * 0.35 + evidence_str * 0.25 + (0.8 if exploration_exhausted else 0.0) * 0.25, 1.0)
+    # Weights: convergence 40%, evidence 30%, exploration 30% → sum = 1.0
+    base_combined = min(convergence * 0.40 + evidence_str * 0.30 + (0.8 if exploration_exhausted else 0.0) * 0.30, 1.0)
     bonus = 0.0
     if methodology_status == "stable": bonus += 0.05
     if evidence_full: bonus += 0.05
@@ -1852,6 +1853,7 @@ async def node_termination_eval(state: dict) -> dict:
         "_cross_disciplinary_proposals": transfer_proposals,
         "iteration": state.get("iteration", 0),
         "_max_iterations_": state.get("_max_iterations_", 200),
+        "consecutive_failures": state.get("consecutive_failures", 0),
     }
 
 # ============================================================
