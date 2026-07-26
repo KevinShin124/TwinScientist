@@ -117,6 +117,21 @@ async def run_research(question: str, domain: str, max_iter: int):
             print(f"  MC策略: {stats['total_episodes']} 个历史 episode, "
                   f"Q表大小={stats['q_table_size']}, ε={stats['epsilon']}")
     print("=" * 70)
+    print()
+    print("  🔬 启动科研流水线...")
+    print(f"  ├─ 伦理审查")
+    print(f"  ├─ 文献调研 (Crossref + arXiv)")
+    print(f"  ├─ 假设生成 (LogicEngine + LLM)")
+    print(f"  ├─ 淘汰赛评估")
+    print(f"  ├─ 实验设计")
+    print(f"  ├─ 数据分析 + 因果推断")
+    print(f"  ├─ 结果解读")
+    print(f"  ├─ 五维评审")
+    print(f"  ├─ 智能体辩论 (Pro/Con/Judge)")
+    print(f"  ├─ 终止评估")
+    print(f"  ├─ 报告撰写")
+    print(f"  └─ 人机审核")
+    print()
 
     result = None
     try:

@@ -121,14 +121,20 @@ class CrossRefSearcher:
         通过 Crossref API 搜索论文。
 
         Args:
-            query: 搜索关键词（自动 URL encode）
+            query: 搜索关键词（自动 URL encode，非 ASCII 字符会被过滤）
             max_results: 最大结果数（API 限制为 20）
 
         Returns:
             Paper 对象列表，按相关度排序
         """
+        # Crossref API rejects queries with non-ASCII characters (400 Bad Request).
+        # Extract ASCII-only keywords for the API call.
+        ascii_query = re.sub(r'[^\x00-\x7F]+', ' ', query).strip()
+        if not ascii_query or len(ascii_query) < 3:
+            ascii_query = "environment human health causal inference"  # fallback
+
         params = {
-            "query": query,
+            "query": ascii_query,
             "rows": min(max_results, 20),
             "select": "title,author,published-print,published-online,"
                       "container-title,DOI,is-referenced-by-count,"
@@ -223,7 +229,7 @@ class CrossRefSearcher:
 class ArXivSearcher:
     """arXiv API — 免费无需密钥，支持 RSS/Atom feed 解析"""
 
-    BASE_URL = "http://export.arxiv.org/api/query"
+    BASE_URL = "https://export.arxiv.org/api/query"
 
     async def search(self, query: str, max_results: int = 20) -> list[Paper]:
         """
