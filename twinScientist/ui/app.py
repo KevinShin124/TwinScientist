@@ -40,8 +40,46 @@ class TwinScientistUI:
 
     def __init__(self, agent_app=None):
         self.agent_app = agent_app
-        self.sessions = {}  # session_id -> state dict
-        self.last_state_update = None  # Most recent state snapshot from agent
+        self.sessions = {}
+        self.last_state_update = None
+
+    def handle_data_upload(self, files: list, data_type: str):
+        """Save uploaded CSV files to the appropriate data directory."""
+        import shutil
+        from pathlib import Path
+
+        if not files:
+            return "## ⚠️ 未选择文件"
+
+        target_dir = Path(f"data/{data_type}")
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        saved = []
+        skipped = []
+        for f in files:
+            fname = Path(f.name).name if hasattr(f, 'name') else Path(str(f)).name
+            dest = target_dir / fname
+            try:
+                if hasattr(f, 'name'):
+                    shutil.copy2(f.name, dest)
+                else:
+                    shutil.copy2(str(f), dest)
+                saved.append(fname)
+            except Exception as e:
+                skipped.append(f"{fname}: {e}")
+
+        lines = [f"## ✅ 上传完成", ""]
+        if saved:
+            lines.append(f"**已保存 {len(saved)} 个文件到 `data/{data_type}/`**:")
+            for name in saved:
+                lines.append(f"- {name}")
+        if skipped:
+            lines.append(f"**跳过 {len(skipped)} 个**:")
+            for s in skipped:
+                lines.append(f"- {s}")
+        lines.append("")
+        lines.append("> 上传完成后，文件将自动被科研流水线识别和使用。")
+        return "\n".join(lines)
 
     def _get_or_create_session(self, session_id: str) -> dict:
         if session_id not in self.sessions:
@@ -278,7 +316,25 @@ class TwinScientistUI:
                     hypothesis_timeline = gr.Markdown(label="演化时间线", value="**尚未生成假设。**")
 
                 # Tab 4: Structured Decision Panel (HITL)
-                with gr.Accordion("🎛️ 结构化决策面板", open=False):
+                with gr.Tab("📁 数据上传"):
+                    gr.Markdown("### 上传传感器或生物特征数据 (CSV)")
+                    gr.Markdown("上传后，数据将自动被科研流水线识别，用于因果推断分析。")
+                    with gr.Row():
+                        data_type_radio = gr.Radio(
+                            choices=[("环境传感器", "sensors"), ("生物特征", "biometric")],
+                            label="数据类型",
+                            value="sensors",
+                        )
+                    data_upload = gr.File(
+                        label="选择 CSV 文件",
+                        file_count="multiple",
+                        file_types=[".csv"],
+                    )
+                    upload_btn = gr.Button("📤 上传数据", variant="primary")
+                    upload_status = gr.Markdown("")
+
+                # Tab 5: Structured Decision Panel (HITL)
+                with gr.Tab("🎛️ 人机决策"):
                     gr.Markdown("**等待 Agent 触发断点...**")
                     action_radio = gr.Radio(
                         choices=["approve", "revise", "chat", "halt"],
@@ -305,6 +361,12 @@ class TwinScientistUI:
                 fn=self.chat_reply,
                 inputs=[chat_input],
                 outputs=[chat_interface, chat_input],
+            )
+
+            upload_btn.click(
+                fn=self.handle_data_upload,
+                inputs=[data_upload, data_type_radio],
+                outputs=[upload_status],
             )
 
         return demo
