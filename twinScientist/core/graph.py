@@ -100,6 +100,7 @@ from core.nodes import (
     node_termination_eval,  # ← uses nodes.py (NOT nodes_term_patch.py)
     node_human_approval,
     node_evolution_manager,
+    _edu_annotation,
 )
 from core.nodes_post_chat import _node_post_report_chat
 from core.debate import DebateOrchestrator
