@@ -1985,6 +1985,8 @@ async def node_termination_eval(state: dict) -> dict:
 
     return {
         "_termination_result": result,
+        "should_terminate": should_terminate,
+        "stop_reason": stop_reason,
         "__decision": "TERMINATE" if should_terminate else "CONTINUE",
         "current_action": "termination_eval",
         "_cross_disciplinary_proposals": transfer_proposals,

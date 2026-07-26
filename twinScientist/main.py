@@ -125,8 +125,9 @@ async def run_research(question: str, domain: str, max_iter: int):
         "query": question,
         "domain": domain,
         "_max_iterations_": max_iter,
-        "auto_confirm": True,  # CLI defaults to auto-confirm
-        "user_guidance": past_context if past_context else None,  # Inject past research context
+        "auto_confirm": True,
+        "iteration": 1,  # Start at round 1, not 0
+        "user_guidance": past_context if past_context else None,
     }
 
     print("=" * 70)

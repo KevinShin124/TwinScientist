@@ -660,16 +660,16 @@ def route_after_reflection(state: AgentState) -> str:
 
 def route_after_termination(state: AgentState) -> str:
     """
-    After termination_eval: read the single-source-of-truth decision.
-
-    termination_eval is the ONLY place that decides stop/continue.
-    This function just reads its verdict.
+    After termination_eval: read the termination decision directly from state.
+    Uses top-level 'should_terminate' field (not nested dict) to avoid
+    LangGraph state merge issues.
     """
-    term_result = state.get("_termination_result")
-    if term_result and term_result.get("should_terminate"):
-        logger.info(f"[RouteAfterTerm] TERMINATE: {term_result.get('stop_reason', '?')}")
+    should_term = state.get("should_terminate", False)
+    reason = state.get("stop_reason", "unknown")
+
+    if should_term:
+        logger.info(f"[RouteAfterTerm] TERMINATE: {reason}")
         return "report_writing"
 
-    # Continue: go through reflection (which does root-cause analysis + iteration++)
-    logger.info(f"[RouteAfterTerm] CONTINUE: {term_result.get('stop_reason', '?') if term_result else 'unknown'}")
+    logger.info(f"[RouteAfterTerm] CONTINUE: {reason}")
     return "reflection"

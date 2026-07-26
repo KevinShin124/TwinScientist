@@ -229,6 +229,8 @@ class AgentState(TypedDict, total=False):
     prev_round_winner_id: str | None    # 上一轮优胜假设 ID（用于跨轮相似度比较）
     prev_round_winner_statement: str | None  # 上一轮优胜假设的陈述（用于语义相似度计算）
     next_step: str | None               # 下一步操作（供路由使用）
+    should_terminate: bool              # 终止决策标志（供路由读取）
+    stop_reason: str                    # 终止/继续原因
 
     # ============================================================
     # Output Channel
