@@ -52,6 +52,42 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
+# State Safety Net — ensures control fields never get dropped
+# ============================================================
+
+import functools
+
+_CONTROL_FIELDS = ("_max_iterations_", "iteration", "consecutive_failures")
+
+
+def carry_control_fields(func):
+    """
+    Decorator: auto-carry _max_iterations_, iteration, consecutive_failures
+    across ALL node return dicts. Prevents LangGraph state merge corruption
+    when a node forgets to return these fields.
+    """
+    @functools.wraps(func)
+    async def wrapper(state: dict) -> dict:
+        result = await func(state)
+        if result is None:
+            result = {}
+        for key in _CONTROL_FIELDS:
+            if key not in result:
+                result[key] = state.get(key, 0 if key != "_max_iterations_" else 200)
+        return result
+    return wrapper
+
+
+def _edu_annotation(node_name: str, explanation: str) -> dict:
+    """Build a standardized educational annotation entry."""
+    return {
+        "node": node_name,
+        "explanation": explanation,
+        "timestamp": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
+    }
+
+
+# ============================================================
 # Helpers
 # ============================================================
 
@@ -278,6 +314,7 @@ def _merge_guard(state: dict) -> tuple:
     """
     return state.get("_max_iterations_", 200), state.get("iteration", 0)
 
+@carry_control_fields
 async def node_ethics_check(state: AgentState) -> dict:
     """
     【伦理与安全审查】第一道防线 — Item 15
@@ -357,6 +394,7 @@ async def node_ethics_check(state: AgentState) -> dict:
 # Items 3: Literature Review Node — Enhanced with Real Search
 # ============================================================
 
+@carry_control_fields
 async def node_literature_review(state: AgentState) -> dict:
     """
     【文献调研与事实提取】增强版 — 基于真实论文检索
@@ -554,6 +592,12 @@ async def node_literature_review(state: AgentState) -> dict:
         "current_action": "literature_review",
         "_max_iterations_": max_iters,
         "iteration": curr_iter,
+        "educational_annotations": [
+            _edu_annotation("literature_review",
+                "文献调研是科学研究的起点。系统并行搜索 Crossref + arXiv 数据库获取真实论文，"
+                "然后由 LLM 提取结构化科学事实并通过 CitationValidator 交叉验证。"
+                "最终自动构建知识图谱，将文献中的实体（变量、生物标志物、方法）关联起来。")
+        ],
         "knowledge_graph": {
             "nodes": [{"id": n, "type": d.get("type", "unknown")}
                       for n, d in kg_raw.nodes(data=True)],
@@ -642,6 +686,7 @@ async def _build_empty_kg(max_iters: int, curr_iter: int) -> dict:
 # Items 5, 26, 27: Hypothesis Generation + Tournament + Bayesian
 # ============================================================
 
+@carry_control_fields
 async def node_hypothesis_generation(state: AgentState) -> dict:
     """
     【假设生成引擎】— 三路推理 + LLM 增强
@@ -841,6 +886,13 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
         "current_action": "hypothesis_generation",
         "_logic_engine_stats": stats,
         "_logic_consistency_reports": consistency_reports,
+        "educational_annotations": [
+            _edu_annotation("hypothesis_generation",
+                "假设生成采用三路推理引擎：归纳推理从已有事实中总结趋势，"
+                "演绎推理从领域专家规则库向下推导，溯因推理从反直觉现象反推最可能解释。"
+                "LogicEngine 先做确定性推理，LLM 再基于文献上下文补充新角度，"
+                "最后合并去重并做逻辑一致性检查。")
+        ],
     }
 
 
@@ -848,6 +900,7 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
 # Item 27: Tournament Evaluation — Multi-Candidate Bracket Elimination
 # ============================================================
 
+@carry_control_fields
 async def node_tournament_eval(state: AgentState) -> dict:
     """
     【假设淘汰赛】从 N 个候选假设中两两比较，最终选出 1 个最优假设。
@@ -971,6 +1024,7 @@ async def node_tournament_eval(state: AgentState) -> dict:
         "current_action": "tournament_eval",
     }
 
+@carry_control_fields
 async def node_experiment_design(state: AgentState) -> dict:
     """
     【实验方案设计】
@@ -1065,6 +1119,7 @@ async def node_experiment_design(state: AgentState) -> dict:
 # Items 18, 19, 20: Data Analysis + Causal Inference
 # ============================================================
 
+@carry_control_fields
 async def node_data_analysis(state: AgentState) -> dict:
     """
     【数据分析与因果推断】
@@ -1244,6 +1299,13 @@ async def node_data_analysis(state: AgentState) -> dict:
         "experiment_records": experiments,
         "evidence_chains": evidence_chains,
         "current_action": "data_analysis",
+        "educational_annotations": [
+            _edu_annotation("data_analysis",
+                "数据分析阶段使用因果推断而非简单相关性分析。"
+                "系统自动选择最优方法：Granger 因果检验判断时序因果关系，"
+                "CCM 收敛交叉映射检测非线性动态耦合，反事实推演估计干预效应。"
+                "每条证据都带有完整的统计依据（p值、效应量、置信区间），确保可追溯可复现。")
+        ],
     }
 
 
@@ -1251,6 +1313,7 @@ async def node_data_analysis(state: AgentState) -> dict:
 # Interpretation Node
 # ============================================================
 
+@carry_control_fields
 async def node_interpretation(state: AgentState) -> dict:
     """
     【结果解读】
@@ -1364,6 +1427,7 @@ async def node_interpretation(state: AgentState) -> dict:
 # Item 14: Reviewer Agent
 # ============================================================
 
+@carry_control_fields
 async def node_reviewer_agent(state: AgentState) -> dict:
     """
     【五维审稿】新颖性/可行性/方法论/证据/影响
@@ -1462,6 +1526,12 @@ async def node_reviewer_agent(state: AgentState) -> dict:
         "review_records": reviews,
         "hypothesis_tree": new_tree,
         "current_action": "reviewer_agent",
+        "educational_annotations": [
+            _edu_annotation("reviewer_agent",
+                "五维评审从新颖性、可行性、方法论、证据强度、影响力五个维度打分，"
+                "模拟学术同行评议。得分≥60通过并更新 Bayesian 后验概率，"
+                "<60 打回修改。这种机制确保只有经过严格审查的假设才能进入下一轮。")
+        ],
     }
 
 
@@ -1469,6 +1539,7 @@ async def node_reviewer_agent(state: AgentState) -> dict:
 # Item 4/10: Reflection Loop
 # ============================================================
 
+@carry_control_fields
 async def node_reflection(state: AgentState) -> dict:
     """
     【反思与修正】根因分析 → 派生修正性假设
@@ -1643,6 +1714,7 @@ async def node_reflection(state: AgentState) -> dict:
 # Item 25: Termination Evaluation
 # ============================================================
 
+@carry_control_fields
 async def node_termination_eval(state: dict) -> dict:
     """
     Multi-dimensional termination evaluation.
@@ -1851,13 +1923,14 @@ async def node_termination_eval(state: dict) -> dict:
         "__decision": "TERMINATE" if should_terminate else "CONTINUE",
         "current_action": "termination_eval",
         "_cross_disciplinary_proposals": transfer_proposals,
-        "iteration": state.get("iteration", 0),
+        "iteration": state.get("iteration", 0) + (0 if should_terminate else 1),
         "_max_iterations_": state.get("_max_iterations_", 200),
         "consecutive_failures": state.get("consecutive_failures", 0),
     }
 
 # ============================================================
 
+@carry_control_fields
 async def node_report_writing(state: AgentState) -> dict:
     """
     【报告撰写】
@@ -2274,6 +2347,7 @@ async def node_report_writing(state: AgentState) -> dict:
 
 
 
+@carry_control_fields
 async def node_pi_agent_meeting(state: AgentState) -> dict:
     """
     【PI Agent 总结汇报】
@@ -2321,6 +2395,7 @@ async def node_pi_agent_meeting(state: AgentState) -> dict:
 # Item 11, 12: Human Approval Gate
 # ============================================================
 
+@carry_control_fields
 async def node_human_approval(state: AgentState) -> dict:
     """
     【人类审核入口点】
@@ -2353,6 +2428,7 @@ async def node_human_approval(state: AgentState) -> dict:
 # Item 9: Evolution Manager
 # ============================================================
 
+@carry_control_fields
 async def node_evolution_manager(state: AgentState) -> dict:
     """
     【自我进化机制】

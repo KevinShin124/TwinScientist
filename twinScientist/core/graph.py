@@ -337,27 +337,18 @@ def _route_post_report_chat(state: AgentState) -> str:
 
 
 # ──────────────────────────────────────────────
-# Async helpers (debate & termination)
+# Debate node (Multi-Agent adversarial review)
 # ──────────────────────────────────────────────
-
-async def _direct_terminate(state: AgentState) -> dict:
-    """Skip debate and go straight to termination evaluation."""
-    return {
-        "current_action": "debate_then_terminate",
-        "_max_iterations_": state.get("_max_iterations_", 200),
-        "iteration": state.get("iteration", 0),
-    }
-
 
 async def _node_debate_then_terminate(state: AgentState) -> dict:
     """
-    Intermediate node: Run multi-agent debate, then evaluate termination.
+    【智能体思辨】Pro/Con/Judge 单轮辩论 — 比赛要求核心功能。
 
-    If debate reaches consensus OR user provides direction during interrupt,
-    proceed directly to termination_eval + report_writing.
-    Otherwise go back to hypothesis_generation for another round.
+    在终止前对最优假设进行对抗性辩论，体现"智能体思辨"能力。
+    精简为 1 轮：LogicEngine 已在 hypothesis_generation 阶段完成确定性推理，
+    辩论阶段只做最后一轮 LLM 对抗论证 + 裁判。
     """
-    from core.llm_client import QwenClient
+    from core.llm_client import get_global_client
 
     hypotheses = state.get("hypothesis_tree", [])
     active_hyps = [
@@ -366,26 +357,31 @@ async def _node_debate_then_terminate(state: AgentState) -> dict:
     ]
 
     if not active_hyps:
-        # No hypotheses to debate → go straight to termination
-        logger.info("[DebateThenTerminate] No active hypotheses, skipping debate")
-        return await _direct_terminate(state)
+        logger.info("[Debate] No active hypotheses, skipping debate")
+        return {
+            "current_action": "debate_then_terminate",
+            "educational_annotations": [
+                _edu_annotation("debate",
+                    "无活跃假设可辩论，跳过辩论阶段。"
+                    "在完整的研究流程中，辩论阶段会对最优假设进行 Pro/Con/Judge 三方对抗论证。")
+            ],
+        }
 
     evidence_chains = state.get("evidence_chains", [])
     review_records = state.get("review_records", [])
     user_feedback = state.get("user_feedback", "")
 
-    # Create LLM client for debate agents
-    try:
+    # Reuse global LLM client (fallback to creating one)
+    llm_client = get_global_client()
+    if llm_client is None:
+        from core.llm_client import QwenClient
         llm_client = QwenClient(
             base_url=settings.bailian_base_url,
             api_key=settings.bailian_api_key,
             model=settings.model_name,
         )
-    except Exception as e:
-        logger.warning(f"[DebateThenTerminate] Failed to create LLM client: {e}")
-        return await _direct_terminate(state)
 
-    # Run debate
+    # Run 1-round debate (was 3 rounds; simplified per competition optimization)
     orchestrator = DebateOrchestrator()
     try:
         debate_result = await orchestrator.run_debate(
@@ -394,17 +390,15 @@ async def _node_debate_then_terminate(state: AgentState) -> dict:
             evidence_chains=evidence_chains,
             review_records=review_records,
             user_feedback=user_feedback,
-            rounds=3,
+            rounds=1,  # 精简为 1 轮
         )
 
-        # Update state with debate results
+        # Update hypothesis with debate results
         updated_hyp_tree = []
         for h in active_hyps:
             h_copy = dict(h)
-            # If debate refuted this hypothesis, update its status
             if debate_result.strongest_hypothesis_id and h.get("id") == debate_result.strongest_hypothesis_id:
                 h_copy["confidence_posterior"] = debate_result.strongest_hypothesis_final_score / 100.0
-                h_copy["updated_at"] = debate_result.debates[-1].created_at if debate_result.debates else None
                 if debate_result.debates:
                     latest = debate_result.debates[-1]
                     h_copy["debate_last_score_after"] = latest.judge_score_after
@@ -423,19 +417,28 @@ async def _node_debate_then_terminate(state: AgentState) -> dict:
                 "timestamp": d.created_at,
             })
 
+        # Build educational annotation
+        edu_text = (
+            "【智能体思辨 — 多 Agent 辩论】\n"
+            "Pro Agent（辩护方）为正反假设提供证据支撑和逻辑论证；"
+            "Con Agent（反辩方）寻找漏洞、替代解释和未控制混杂因子；"
+            "Judge Agent（裁判）综合双方论据做出公正裁决。\n"
+            "这种对抗性辩论机制模拟了科学共同体中的同行评议过程，"
+            "是 AI Scientist 确保假设质量的关键环节。"
+        )
+
         return {
             "hypothesis_tree": updated_hyp_tree,
             "debate_history": debate_history,
             "_debate_completed": True,
             "consensus_reached": debate_result.consensus_reached,
             "current_action": "debate_then_terminate",
-            "_max_iterations_": state.get("_max_iterations_", 200),
-            "iteration": state.get("iteration", 0),
+            "educational_annotations": [_edu_annotation("debate", edu_text)],
         }
 
     except Exception as e:
-        logger.error(f"[DebateThenTerminate] Debate failed: {e}")
-        return await _direct_terminate(state)
+        logger.error(f"[Debate] Failed: {e}")
+        return {"current_action": "debate_then_terminate"}
 
 
 # ──────────────────────────────────────────────

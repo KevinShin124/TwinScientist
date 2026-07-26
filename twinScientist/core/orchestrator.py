@@ -71,28 +71,25 @@ def _hypothesis_statement_similarity(stmt_a: str, stmt_b: str) -> float:
 
 def _mc_log_and_recommend(state: AgentState, chosen_action: str) -> str:
     """
-    记录当前步骤到 MC 经验库，并获取下一步推荐。
+    MC/Experience logging — currently disabled for competition optimization.
+    MC RL requires hundreds of episodes to be meaningful; during competition
+    the system focuses on deterministic, reliable routing.
 
-    在每个路由决策点调用：
-    1. 将 (current_state, chosen_action) 记录到 MC episode
-    2. 返回 MC 策略推荐文本（用于注入 LLM prompt）
-
-    Best-effort: 任何异常都会被静默捕获，不影响正常路由。
+    To re-enable, set TWINSCIENTIST_MC_ENABLED=1 in environment.
     """
-    if not _MC_AVAILABLE and not _EXP_AVAILABLE:
+    import os as _os
+    if not _os.getenv("TWINSCIENTIST_MC_ENABLED"):
         return ""
+    # Best-effort MC logging below (disabled by default)
     try:
-        logger.info(f"[MC] Logging step: action={chosen_action}, mc={_MC_AVAILABLE}, exp={_EXP_AVAILABLE}")
-        if _MC_AVAILABLE:
-            mc_policy.log_step(state, chosen_action)
-        if _EXP_AVAILABLE:
-            exp_store.log_step(state, chosen_action)
-        if _MC_AVAILABLE:
-            recommendation = mc_policy.recommend(state)
-            return mc_policy.format_recommendation_for_prompt(recommendation)
-    except Exception as e:
-        logger.warning(f"[MC] log_and_recommend failed: {e}")
-    return ""
+        from core.mc_learning import mc_policy
+        from core.experience import exp_store
+        mc_policy.log_step(state, chosen_action)
+        exp_store.log_step(state, chosen_action)
+        recommendation = mc_policy.recommend(state)
+        return mc_policy.format_recommendation_for_prompt(recommendation)
+    except Exception:
+        return ""
 
 
 def _mc_influence_route(state: AgentState, default_action: str, candidates: list[str]) -> str:
