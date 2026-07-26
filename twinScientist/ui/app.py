@@ -85,15 +85,13 @@ class TwinScientistUI:
         else:
             yield "[UI] Agent app not configured. Connect your LLM first.\n"
 
-    def chat_reply(
-        self,
-        session_id: str,
-        message: str,
-        current_state: dict,
-    ):
+    def chat_reply(self, message: str):
         """Process user chat message and generate agent response."""
+        if not message or not message.strip():
+            return "", ""
+
         if not HAS_CHAT_AGENT or not self.agent_app:
-            return "Chat not available. Please connect an agent app."
+            return "Chat not available.", ""
 
         try:
             from core.llm_client import QwenClient
@@ -106,36 +104,23 @@ class TwinScientistUI:
             )
 
             chat_agent = ChatAgent(llm_client)
-
-            action = current_state.get("current_action", "")
+            state = self.last_state_update or {}
+            action = state.get("current_action", "")
 
             result = chat_agent.reply(
                 llm_client=llm_client,
                 user_message=message,
-                state=current_state,
+                state=state,
                 action=action,
             )
 
             reply = result.get("reply", "Sorry, I couldn't generate a response.")
             sentiment = result.get("sentiment", "unknown")
 
-            # Store in session
-            sess = self._get_or_create_session(session_id)
-            sess["chat_history"].append({"role": "user", "content": message})
-            sess["chat_history"].append({"role": "assistant", "content": reply})
-
-            # Format output
-            formatted = (
-                f"**[{sentiment.upper()}]**\n\n{reply}"
-            )
-
-            return formatted, sess["chat_history"]
+            return f"**[{sentiment.upper()}]**\n\n{reply}", ""
 
         except Exception as e:
-            import traceback
-            error_detail = traceback.format_exc()
-            logger.warning(f"[ChatAgent] Error: {e}")
-            return f"I encountered an error: {str(e)[:200]}", []
+            return f"Error: {str(e)[:200]}", ""
 
     def submit_decision(
         self,
@@ -318,7 +303,7 @@ class TwinScientistUI:
 
             chat_send.click(
                 fn=self.chat_reply,
-                inputs=[chat_input],  # Simplified — need state context too
+                inputs=[chat_input],
                 outputs=[chat_interface, chat_input],
             )
 
