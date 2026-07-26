@@ -128,10 +128,38 @@ class CrossRefSearcher:
             Paper 对象列表，按相关度排序
         """
         # Crossref API rejects queries with non-ASCII characters (400 Bad Request).
-        # Extract ASCII-only keywords for the API call.
-        ascii_query = re.sub(r'[^\x00-\x7F]+', ' ', query).strip()
+        # Map Chinese scientific terms to English keywords for the API call.
+        CN_TO_EN_KEYWORDS = {
+            "温度": "temperature", "湿度": "humidity", "心率": "heart rate",
+            "心率变异性": "heart rate variability", "HRV": "HRV",
+            "血氧": "blood oxygen", "SpO2": "SpO2", "CO2": "CO2",
+            "二氧化碳": "carbon dioxide", "环境": "environment",
+            "人体": "human", "健康": "health", "影响": "effect",
+            "因果": "causal", "传感器": "sensor", "PM2.5": "PM2.5",
+            "VOC": "VOC", "视觉": "visual", "疲劳": "fatigue",
+            "个体化": "personalized", "N-of-1": "N-of-1",
+            "睡眠": "sleep", "血压": "blood pressure",
+            "室内": "indoor", "空气": "air", "质量": "quality",
+            "暴露": "exposure", "响应": "response",
+            "生理": "physiological", "指标": "indicator",
+            "生物": "biometric", "特征": "feature",
+            "天气": "weather", "气候": "climate",
+            "污染物": "pollutant", "臭氧": "ozone",
+            "噪声": "noise", "光照": "light",
+            "通风": "ventilation", "建筑": "building",
+            "办公室": "office", "学校": "school",
+            "老年人": "elderly", "儿童": "children",
+            "长期": "long-term", "短期": "short-term",
+            "监测": "monitoring", "可穿戴": "wearable",
+            "研究": "study", "分析": "analysis",
+        }
+        ascii_query = query
+        for cn, en in CN_TO_EN_KEYWORDS.items():
+            ascii_query = ascii_query.replace(cn, en)
+        # Also strip remaining non-ASCII
+        ascii_query = re.sub(r'[^\x00-\x7F]+', ' ', ascii_query).strip()
         if not ascii_query or len(ascii_query) < 3:
-            ascii_query = "environment human health causal inference"  # fallback
+            ascii_query = "indoor environment human health physiological response"
 
         params = {
             "query": ascii_query,

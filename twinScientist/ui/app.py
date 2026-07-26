@@ -51,6 +51,9 @@ def get_data_status() -> str:
     return f"📊 {' + '.join(parts)} file(s) available."
 
 
+from core.language import LANGUAGES, get_language_label
+
+
 class TwinScientistUI:
     """Gradio-based interactive frontend for twinScientist with full HITL support"""
 
@@ -172,6 +175,7 @@ class TwinScientistUI:
             "_max_iterations_": max_iterations,
             "auto_confirm": auto_approve,
             "iteration": 1,
+            "language": language,
         }
 
         report_content = ""
@@ -384,6 +388,12 @@ class TwinScientistUI:
                         value=False,
                         info="When checked, all HITL checkpoints are auto-approved",
                     )
+                    lang_selector = gr.Dropdown(
+                        choices=[(v, k) for k, v in LANGUAGES.items()],
+                        label="Report Language / 报告语言",
+                        value="zh",
+                        info="Language for generated research reports and annotations",
+                    )
                     start_btn = gr.Button("🚀 Start Research", variant="primary")
 
                 # Right column: Output and monitoring
@@ -469,7 +479,7 @@ class TwinScientistUI:
 
             start_btn.click(
                 fn=self.run_research,
-                inputs=[domain_input, question_input, max_iter_slider, auto_approve_cb, api_key_input],
+                inputs=[domain_input, question_input, max_iter_slider, auto_approve_cb, api_key_input, lang_selector],
                 outputs=[output_stream, report_preview, progress_md],
             )
 
