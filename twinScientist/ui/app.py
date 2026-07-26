@@ -36,6 +36,21 @@ except ImportError:
     HAS_EDUCATION = False
 
 
+def get_data_status() -> str:
+    """Return a human-readable data availability summary."""
+    import glob as _glob
+    sensor_count = len(_glob.glob(str(Path("data/sensors/*.csv"))))
+    bio_count = len(_glob.glob(str(Path("data/biometric/*.csv"))))
+    if sensor_count == 0 and bio_count == 0:
+        return "📭 No data files. Upload CSVs in the Data Upload tab."
+    parts = []
+    if sensor_count:
+        parts.append(f"{sensor_count} sensor")
+    if bio_count:
+        parts.append(f"{bio_count} biometric")
+    return f"📊 {' + '.join(parts)} file(s) available."
+
+
 class TwinScientistUI:
     """Gradio-based interactive frontend for twinScientist with full HITL support"""
 
@@ -110,30 +125,103 @@ class TwinScientistUI:
         research_question: str,
         max_iterations: int,
         auto_approve: bool,
+        api_key: str = "",
         **kwargs,
     ):
-        """启动研究循环并返回流式输出"""
+        """Launch research pipeline with streaming output and live preview."""
+        import glob as _glob
+
+        # === Pre-flight checks ===
+        if not research_question or not research_question.strip():
+            yield "[LOG] ⚠️ Please enter a research question.\n", "", ""
+            return
+
+        # Apply API key from UI if provided
+        if api_key and api_key.strip():
+            os.environ["BAILIAN_API_KEY"] = api_key.strip()
+
+        api_key_final = os.getenv("BAILIAN_API_KEY", "")
+        if not api_key_final or not api_key_final.strip():
+            yield (
+                "[LOG] ⚠️ No API key configured.\n\n"
+                "Please set your Bailian API key in one of these ways:\n"
+                "1. Open the **API Settings** panel above and enter your key\n"
+                "2. Or create a `.env` file with `BAILIAN_API_KEY=sk-...`\n\n"
+                "Get your key at: https://dashscope.aliyun.com/\n",
+                "",
+                "",
+            )
+            return
+
+        # Check data availability
+        sensor_files = _glob.glob(str(Path("data/sensors/*.csv")))
+        bio_files = _glob.glob(str(Path("data/biometric/*.csv")))
+        data_status = ""
+        if not sensor_files and not bio_files:
+            data_status = (
+                "\n> 💡 **Tip**: No data files found. You can upload your own sensor/biometric "
+                "CSV files in the **Data Upload** tab. The system will use built-in domain "
+                "knowledge as a fallback.\n"
+            )
+
+        yield f"[LOG] 🔬 Starting research pipeline...\n[LOG] Data: {len(sensor_files)} sensor files, {len(bio_files)} biometric files{data_status}\n\n", "", ""
+
         initial_state = {
             "query": research_question,
-            "domain": domain or "环境—人体关联",
+            "domain": domain or "Environment-Human Health",
             "_max_iterations_": max_iterations,
             "auto_confirm": auto_approve,
+            "iteration": 1,
         }
 
+        report_content = ""
         if self.agent_app:
-            async for event in self.agent_app.astream(
-                initial_state,
-                stream_mode="updates",
-                config={"configurable": {"recursion_limit": max_iterations * 10}},
-            ):
-                if isinstance(event, dict):
-                    node_name = list(event.keys())[0]
-                    # Stream structured events for UI consumption
-                    yield f"[EVENT]{{\"node\":\"{node_name}\",\"state\":{json.dumps(event[node_name], ensure_ascii=False)}}}\n"
+            try:
+                async for event in self.agent_app.astream(
+                    initial_state,
+                    stream_mode="updates",
+                    config={"configurable": {"recursion_limit": max_iterations * 10}},
+                ):
+                    if isinstance(event, dict):
+                        node_name = list(event.keys())[0]
+                        node_data = event[node_name]
+
+                        # Extract report if generated
+                        if "final_report" in node_data:
+                            report_content = node_data["final_report"]
+
+                        # Stream structured events for UI consumption
+                        log_line = f"[EVENT]{json.dumps({'node': node_name, 'state': node_data}, ensure_ascii=False)}\n"
+                        yield log_line, "", ""
+                    else:
+                        yield f"{event}\n", "", ""
+
+                # Research complete — yield final report preview
+                if report_content:
+                    preview = report_content[:3000]
+                    if len(report_content) > 3000:
+                        preview += f"\n\n---\n\n*... ({len(report_content)} chars total. Full report saved to disk.)*"
+                    yield "", preview, ""
                 else:
-                    yield f"{event}\n"
+                    yield "", "## ⚠️ No report generated. Check logs for errors.", ""
+
+            except Exception as e:
+                error_msg = (
+                    f"[LOG] ❌ Research pipeline error: {str(e)[:500]}\n\n"
+                    f"**Troubleshooting**:\n"
+                    f"- Verify your API key is correct\n"
+                    f"- Check your internet connection\n"
+                    f"- Try reducing max iterations\n"
+                )
+                yield error_msg, "", ""
         else:
-            yield "[UI] Agent app not configured. Connect your LLM first.\n"
+            yield (
+                "[LOG] ⚠️ Agent not configured.\n\n"
+                "Please restart the application with:\n"
+                "```bash\npython -m main --ui\n```\n",
+                "",
+                "",
+            )
 
     def chat_reply(self, message: str):
         """Process user chat message and generate agent response."""
@@ -276,6 +364,7 @@ class TwinScientistUI:
                             info="Alibaba Cloud Bailian API key. Leave empty to use .env config.",
                         )
                         api_status = gr.Markdown("")
+                    data_status_md = gr.Markdown(get_data_status())
                     domain_input = gr.Textbox(
                         label="Research Domain",
                         value="Environment-Human Health",
@@ -380,8 +469,8 @@ class TwinScientistUI:
 
             start_btn.click(
                 fn=self.run_research,
-                inputs=[domain_input, question_input, max_iter_slider, auto_approve_cb],
-                outputs=output_stream,
+                inputs=[domain_input, question_input, max_iter_slider, auto_approve_cb, api_key_input],
+                outputs=[output_stream, report_preview, progress_md],
             )
 
             chat_send.click(
