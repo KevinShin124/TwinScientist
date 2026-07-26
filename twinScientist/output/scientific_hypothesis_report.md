@@ -1,7 +1,7 @@
 # 科学假设与研究计划
 
 ## 一、待研究问题（Problem Statement）
-**高温CO2复合暴露对室内工作人员HRV有何因果影响?**
+**温度对心率变异性的影响**
 
 - **学科领域**: 环境—人体关联
 - **研究轮次**: 0
@@ -18,11 +18,11 @@
 - **跨学科迁移**: 环境工程 × 生物医学信息学 × 因果机器学习
 
 ### 支撑事实（来自文献调研）
-- 高温环境可导致人体核心温度升高，进而影响心血管系统功能 | Reference: [需要验证]
-- CO2浓度增加在密闭空间内与认知功能下降有关 | Reference: Allen, J.G., et al., 2016, Environmental Health Perspectives, DOI:10.1289/ehp.1510037
-- 心率变异性(HRV)是评估自主神经系统状态的一个重要指标 | Reference: Task Force of the European Society of Cardiology and the North American Society of Pacing and Electrophysiology, 1996, Circulation, PMID:8598068
-- 短期暴露于高CO2水平可能会引起头痛、嗜睡等不适症状 | Reference: Satish, U., et al., 2012, Environmental Health Perspectives, DOI:10.1289/ehp.1104312
-- 室内外空气污染已被证明会影响HRV，表明环境污染对人体健康有潜在负面影响 | Reference: Brook, R.D., et al., 2010, Journal of the American College of Cardiology, DOI:10.1016/j.jacc.2009.09.063
+- 温度变化能够显著影响人体的心率变异性，尤其是在极端温度条件下。| [需要验证]
+- 在寒冷环境下，心率变异性的降低可能是心血管事件风险增加的一个因素。| Reference: [需要验证]
+- 高温环境同样可以导致心率变异性下降，这与身体为了散热而增加心率有关。| [需要验证]
+- 砭石疗法（一种通过加热砭石接触皮肤以促进血液循环的方法）被认为可以通过改善局部血流来间接影响心率变异性。| Reference: [需要验证]
+- 适度的热疗（如桑拿浴）长期来看可能有助于提高健康个体的心率变异性水平。| [需要验证]
 
 ---
 
@@ -160,14 +160,14 @@ Y(t) = f(X(t)) + ε(t)
 ## 十一、参考文献（References）
 > **重要声明**: 以下引用必须为真实存在的学术论文。当前由文献调研模块自动提取。
 
-1. [需要验证]
-2. Allen, J.G., et al., 2016, Environmental Health Perspectives, DOI:10.1289/ehp.1510037
-3. Task Force of the European Society of Cardiology and the North American Society of Pacing and Electrophysiology, 1996, Circulation, PMID:8598068
-4. Satish, U., et al., 2012, Environmental Health Perspectives, DOI:10.1289/ehp.1104312
-5. Brook, R.D., et al., 2010, Journal of the American College of Cardiology, DOI:10.1016/j.jacc.2009.09.063
-6. [需要验证]
-7. [需要验证]
-8. Wargocki, P., & Wyon, D.P., 2007, Indoor Air, DOI:10.1111/j.1600-0668.2007.00476.x
+1. Unknown
+2. [需要验证]
+3. Unknown
+4. [需要验证]
+5. Unknown
+6. Unknown
+7. Unknown
+8. Unknown
 9. Unknown
 10. Unknown
 
@@ -193,6 +193,6 @@ Y(t) = f(X(t)) + ε(t)
 ---
 
 *本报告由 twinScientist AI Scientist 系统自动生成*
-*生成时间: 2026-07-23 09:27 UTC*
+*生成时间: 2026-07-26 07:41 UTC*
 *迭代轮次: 0/5 | 收敛度: 0.0%*
 *Agent: Qwen系列 (阿里云百炼平台) | 编排: LangGraph*

@@ -345,6 +345,28 @@ async def _node_debate_then_terminate(state: AgentState) -> dict:
     review_records = state.get("review_records", [])
     user_feedback = state.get("user_feedback", "")
 
+    # === Debate gating: skip debate if quality is already clearly high ===
+    # Saves 3 LLM calls when the outcome is not in doubt
+    latest_review = review_records[-1] if review_records else {}
+    review_score = latest_review.get("total_score", 0)
+    evidence_str = sum(e.get("strength", 0.5) for e in evidence_chains) / max(len(evidence_chains), 1)
+
+    if review_score >= 85 and evidence_str > 0.8:
+        logger.info(
+            f"[Debate] SKIPPED: review={review_score}, evidence={evidence_str:.3f} "
+            f"— quality already clearly high, debate would add no value"
+        )
+        return {
+            "current_action": "debate_then_terminate",
+            "_debate_completed": True,
+            "consensus_reached": True,
+            "educational_annotations": [
+                _edu_annotation("debate",
+                    "辩论已跳过：评审分数 {review_score} 且证据强度 {evidence_str:.3f} 表明假设质量已足够高，"
+                    "对抗性辩论不会改变结论。".format(review_score=review_score, evidence_str=evidence_str))
+            ],
+        }
+
     # Reuse global LLM client (fallback to creating one)
     llm_client = get_global_client()
     if llm_client is None:

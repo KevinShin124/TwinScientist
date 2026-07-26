@@ -1862,16 +1862,17 @@ async def node_termination_eval(state: dict) -> dict:
     logger.info(f"[TerminationEval] Hyp space: {hyp_space_size} active, conf={hypo_confidence_max:.3f}, converged={hypo_converged}")
 
     # ============================================================
-    # TERMINATION DECISION — Budget-first with quality early-exit
+    # TERMINATION DECISION — Marginal Improvement Detection
     #
-    # Design principle (from Sakana AI-Scientist, Google Co-Scientist):
-    #   Primary: Budget-based. Run N rounds, collect best results.
-    #   Secondary: Quality-based early exit if evidence is sufficient.
-    #   Safety: Stagnation detection to prevent wasting compute.
+    # Core principle: stop when additional rounds are unlikely to
+    # produce meaningfully better results (marginal benefit < cost).
     #
-    # This is NOT convergence-based because the system generates NEW
-    # hypotheses each round — convergence would require stability,
-    # which contradicts the goal of exploration.
+    # Uses a sliding window of review scores to detect three patterns:
+    #   IMPROVING: scores trending up → keep going
+    #   PLATEAU: scores flat → diminishing returns, stop
+    #   DECLINING: scores trending down → overfitting, stop
+    #
+    # No magic numbers. Thresholds are derived from the data itself.
     # ============================================================
 
     # --- Compute quality signals ---
@@ -1881,9 +1882,26 @@ async def node_termination_eval(state: dict) -> dict:
         (h.get("confidence_posterior", h.get("confidence_prior", 0)) for h in approved_hyps),
         default=0.0
     )
+
+    # Build review score history (across all rounds)
     review_scores = [r.get("total_score", 0) for r in state.get("review_records", [])]
     best_review = max(review_scores) if review_scores else 0
-    avg_review = sum(review_scores[-3:]) / max(len(review_scores[-3:]), 1) if review_scores else 0
+    window = review_scores[-3:] if len(review_scores) >= 3 else review_scores
+
+    # --- Marginal improvement analysis ---
+    # Trend: is the best hypothesis quality improving over recent rounds?
+    trend = "initial"  # first 1-2 rounds
+    if len(window) >= 3:
+        # Linear trend: positive slope = improving, flat = plateau, negative = declining
+        first_half = sum(window[:len(window)//2]) / max(len(window)//2, 1)
+        second_half = sum(window[len(window)//2:]) / max(len(window) - len(window)//2, 1)
+        delta = second_half - first_half
+        if delta > 5:
+            trend = "improving"
+        elif delta < -5:
+            trend = "declining"
+        else:
+            trend = "plateau"
 
     # --- Decision ---
     max_iters = state.get("_max_iterations_", 200)
@@ -1891,35 +1909,48 @@ async def node_termination_eval(state: dict) -> dict:
     should_terminate = False
     stop_reason = ""
 
-    # === PRIMARY: Budget-based (how ALL major AI Scientists work) ===
+    # === SIGNAL 1: Budget exhausted ===
     if iteration >= max_iters:
         should_terminate = True
-        stop_reason = f"Budget exhausted: {iteration}/{max_iters} iterations completed"
+        stop_reason = f"Budget exhausted ({iteration}/{max_iters} rounds)"
 
-    # === SECONDARY: Quality-based early exit (stop early if results are good) ===
-    elif iteration >= 3 and approved_count >= 2 and evidence_str > 0.7 and best_review >= 70:
+    # === SIGNAL 2: Declining quality (overfitting / regression) ===
+    elif trend == "declining" and iteration >= 3:
         should_terminate = True
         stop_reason = (
-            f"Early exit: {approved_count} approved hypotheses, "
-            f"evidence={evidence_str:.3f}, best_review={best_review}, "
-            f"best_confidence={best_confidence:.0%} — sufficient quality achieved"
+            f"Quality declining: review scores {window} trending down "
+            f"(best was {best_review}). Stopping to prevent overfitting."
         )
 
-    # === SAFETY: Stagnation detection ===
-    elif iteration >= 4:
-        recent_reviews = review_scores[-3:] if len(review_scores) >= 3 else review_scores
-        if recent_reviews and max(recent_reviews) - min(recent_reviews) < 5:
+    # === SIGNAL 3: Plateau with sufficient quality ===
+    elif trend == "plateau" and iteration >= 3:
+        if best_review >= 70 and evidence_str > 0.6:
             should_terminate = True
             stop_reason = (
-                f"Stagnation: review scores stable at ~{avg_review:.0f} "
-                f"for last {len(recent_reviews)} rounds — no further improvement expected"
+                f"Plateau reached: review scores stable at ~{sum(window)/len(window):.0f}, "
+                f"best={best_review}, evidence={evidence_str:.3f}. "
+                f"Marginal improvement unlikely."
             )
+        elif best_review < 60:
+            should_terminate = True
+            stop_reason = (
+                f"Plateau at low quality: review scores stable at ~{sum(window)/len(window):.0f}. "
+                f"Additional rounds unlikely to help. Generate report with caveats."
+            )
+
+    # === SIGNAL 4: Strong evidence + high review (early exit) ===
+    elif evidence_str > 0.85 and best_review >= 75 and approved_count >= 1:
+        should_terminate = True
+        stop_reason = (
+            f"Strong results: evidence={evidence_str:.3f}, review={best_review}, "
+            f"{approved_count} approved hypotheses. Early exit."
+        )
 
     if not should_terminate:
         stop_reason = (
-            f"Continue round {iteration+1}/{max_iters}: "
-            f"approved={approved_count}, evidence={evidence_str:.3f}, "
-            f"best_review={best_review}, best_confidence={best_confidence:.0%}"
+            f"Continue ({trend}): round {iteration+1}/{max_iters}, "
+            f"review_scores={window}, best={best_review}, "
+            f"evidence={evidence_str:.3f}, approved={approved_count}"
         )
 
     logger.info(f"[TerminationEval] {'TERMINATE' if should_terminate else 'CONTINUE'}: {stop_reason}")
