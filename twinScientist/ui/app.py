@@ -50,7 +50,7 @@ class TwinScientistUI:
         from pathlib import Path
 
         if not files:
-            return "## ⚠️ 未选择文件"
+            return "## ⚠️ No files selected"
 
         target_dir = Path(f"data/{data_type}")
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -69,29 +69,29 @@ class TwinScientistUI:
             except Exception as e:
                 skipped.append(f"{fname}: {e}")
 
-        lines = [f"## ✅ 上传完成", ""]
+        lines = [f"## ✅ Upload Complete", ""]
         if saved:
-            lines.append(f"**已保存 {len(saved)} 个文件到 `data/{data_type}/`**:")
+            lines.append(f"**Saved {len(saved)} file(s) to `data/{data_type}/`**:")
             for name in saved:
                 lines.append(f"- {name}")
         if skipped:
-            lines.append(f"**跳过 {len(skipped)} 个**:")
+            lines.append(f"**Skipped {len(skipped)}**:")
             for s in skipped:
                 lines.append(f"- {s}")
         lines.append("")
-        lines.append("> 上传完成后，文件将自动被科研流水线识别和使用。")
+        lines.append("> Files will be auto-detected and used by the research pipeline.")
         return "\n".join(lines)
 
     def validate_api_key(self, key: str) -> str:
         """Validate and apply the API key."""
         if not key or not key.strip():
-            return "⚠️ 未设置 API Key。将使用 .env 中的配置（如果存在）。"
+            return "⚠️ No API key set. Will use .env config if available."
         if not key.startswith("sk-"):
-            return "⚠️ API Key 格式可能不正确（应以 sk- 开头）。"
+            return "⚠️ API key format may be incorrect (should start with sk-)."
         if len(key) < 20:
-            return "⚠️ API Key 太短，可能无效。"
+            return "⚠️ API key too short, may be invalid."
         os.environ["BAILIAN_API_KEY"] = key.strip()
-        return "✅ API Key 已设置。"
+        return "✅ API key configured."
 
     def _get_or_create_session(self, session_id: str) -> dict:
         if session_id not in self.sessions:
@@ -267,47 +267,47 @@ class TwinScientistUI:
             with gr.Row():
                 # Left column: Input controls
                 with gr.Column(scale=1):
-                    with gr.Accordion("⚙️ API 设置", open=False):
+                    with gr.Accordion("⚙️ API Settings", open=False):
                         api_key_input = gr.Textbox(
-                            label="百炼 API Key",
+                            label="Bailian API Key",
                             placeholder="sk-...",
                             type="password",
                             value=os.getenv("BAILIAN_API_KEY", ""),
-                            info="阿里云百炼平台 API Key。留空则使用 .env 中的配置。",
+                            info="Alibaba Cloud Bailian API key. Leave empty to use .env config.",
                         )
                         api_status = gr.Markdown("")
                     domain_input = gr.Textbox(
-                        label="学科领域",
-                        value="环境—人体关联",
-                        info="如：环境健康、临床医学、神经科学等",
+                        label="Research Domain",
+                        value="Environment-Human Health",
+                        info="e.g., Environmental Health, Clinical Medicine, Neuroscience",
                     )
                     question_input = gr.Textbox(
-                        label="研究问题",
-                        placeholder="输入你想探索的科学问题...",
+                        label="Research Question",
+                        placeholder="Enter a scientific question to explore...",
                         lines=3,
                     )
                     max_iter_slider = gr.Slider(
                         minimum=3, maximum=200, value=10, step=1,
-                        label="最大迭代次数",
+                        label="Max Iterations",
                     )
                     auto_approve_cb = gr.Checkbox(
-                        label="自动通过人类审核（跳过确认）",
+                        label="Auto-approve (skip human review)",
                         value=False,
-                        info="勾选后将跳过所有 checkpoint 节点",
+                        info="When checked, all HITL checkpoints are auto-approved",
                     )
-                    start_btn = gr.Button("🚀 开始研究", variant="primary")
+                    start_btn = gr.Button("🚀 Start Research", variant="primary")
 
                 # Right column: Output and monitoring
                 with gr.Column(scale=2):
-                    progress_md = gr.Markdown("**就绪**")
+                    progress_md = gr.Markdown("**Ready**")
                     output_stream = gr.TextArea(
-                        label="Agent 运行日志",
+                        label="Agent Log",
                         lines=10,
                         interactive=False,
                     )
                     report_preview = gr.Markdown(
-                        "## 📄 研究报告预览\n\n"
-                        "运行完成后将在此显示生成的《科学假设与研究计划》。"
+                        "## 📄 Research Report Preview\n\n"
+                        "The generated Scientific Hypothesis & Research Plan will appear here."
                     )
 
             # ========================================================
@@ -315,59 +315,59 @@ class TwinScientistUI:
             # ========================================================
             with gr.Tabs():
                 # Tab 1: Main Chat
-                with gr.Tab("💬 聊天"):
+                with gr.Tab("💬 Chat"):
                     chat_interface = gr.Chatbot(
-                        label="对话记录",
+                        label="Conversation",
                         height=300,
                     )
                     with gr.Row():
                         chat_input = gr.Textbox(
-                            label="输入消息",
-                            placeholder="你可以质疑假设、提供新信息、或询问研究进展...",
+                            label="Message",
+                            placeholder="Question findings, provide new info, or ask about progress...",
                             scale=4,
                         )
-                        chat_send = gr.Button("发送", variant="primary", scale=1)
+                        chat_send = gr.Button("Send", variant="primary", scale=1)
 
                 # Tab 2: Debate Records
-                with gr.Tab("⚔️ 辩论实录"):
-                    debate_table = gr.Markdown(label="辩论历史", value="**暂无辩论记录。**")
+                with gr.Tab("⚔️ Debate"):
+                    debate_table = gr.Markdown(label="Debate History", value="**No debate records yet.**")
 
                 # Tab 3: Hypothesis Timeline
-                with gr.Tab("📈 假设进化"):
-                    hypothesis_timeline = gr.Markdown(label="演化时间线", value="**尚未生成假设。**")
+                with gr.Tab("📈 Hypotheses"):
+                    hypothesis_timeline = gr.Markdown(label="Evolution Timeline", value="**No hypotheses generated yet.**")
 
-                # Tab 4: Structured Decision Panel (HITL)
-                with gr.Tab("📁 数据上传"):
-                    gr.Markdown("### 上传传感器或生物特征数据 (CSV)")
-                    gr.Markdown("上传后，数据将自动被科研流水线识别，用于因果推断分析。")
+                # Tab 4: Data Upload
+                with gr.Tab("📁 Data Upload"):
+                    gr.Markdown("### Upload Sensor or Biometric Data (CSV)")
+                    gr.Markdown("Uploaded files are automatically recognized by the research pipeline.")
                     with gr.Row():
                         data_type_radio = gr.Radio(
-                            choices=[("环境传感器", "sensors"), ("生物特征", "biometric")],
-                            label="数据类型",
+                            choices=[("Environmental Sensors", "sensors"), ("Biometric", "biometric")],
+                            label="Data Type",
                             value="sensors",
                         )
                     data_upload = gr.File(
-                        label="选择 CSV 文件",
+                        label="Select CSV Files",
                         file_count="multiple",
                         file_types=[".csv"],
                     )
-                    upload_btn = gr.Button("📤 上传数据", variant="primary")
+                    upload_btn = gr.Button("📤 Upload Data", variant="primary")
                     upload_status = gr.Markdown("")
 
-                # Tab 5: Structured Decision Panel (HITL)
-                with gr.Tab("🎛️ 人机决策"):
-                    gr.Markdown("**等待 Agent 触发断点...**")
+                # Tab 5: Human-in-the-Loop
+                with gr.Tab("🎛️ HITL"):
+                    gr.Markdown("**Waiting for agent checkpoint...**")
                     action_radio = gr.Radio(
                         choices=["approve", "revise", "chat", "halt"],
-                        label="决策操作",
+                        label="Decision",
                         value="approve",
                     )
                     revision_text = gr.Textbox(
-                        label="修改建议（可选）",
-                        placeholder="请输入具体的修改意见...",
+                        label="Revision Notes (optional)",
+                        placeholder="Enter specific feedback...",
                         lines=2,
                     )
-                    submit_decision = gr.Button("提交决策", variant="secondary")
+                    submit_decision = gr.Button("Submit Decision", variant="secondary")
 
             # ========================================================
             # Event Handlers
