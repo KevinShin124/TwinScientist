@@ -15,7 +15,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from config.settings import settings
+from core.llm_client import QwenClient
+from core.state import AgentState
+
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def _node_post_report_chat(state: AgentState) -> dict:

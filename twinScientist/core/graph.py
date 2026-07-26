@@ -302,8 +302,8 @@ def build_cognitive_graph() -> "CompiledGraph":
     checkpointer = MemorySaver()
 
     compiled = workflow.compile(
-        interrupt_before=["human_approval", "post_report_chat"],  # HITL: wait for human confirmation; also post-report chat
-        interrupt_after=["literature_review", "debate_then_terminate", "post_report_chat"],  # Interrupt after key decisions AND after post-report greeting
+        interrupt_before=[],  # CLI mode: no interrupts. UI mode handles HITL via its own flow.
+        interrupt_after=[],   # CLI mode: no interrupts.
         checkpointer=checkpointer,
     )
 
@@ -402,8 +402,8 @@ async def _node_debate_then_terminate(state: AgentState) -> dict:
         for h in active_hyps:
             h_copy = dict(h)
             # If debate refuted this hypothesis, update its status
-            if debate_result.strengthiest_hypothesis_id and h.get("id") == debate_result.strengthiest_hypothesis_id:
-                h_copy["confidence_posterior"] = debate_result.strengthiest_hypothesis_final_score / 100.0
+            if debate_result.strongest_hypothesis_id and h.get("id") == debate_result.strongest_hypothesis_id:
+                h_copy["confidence_posterior"] = debate_result.strongest_hypothesis_final_score / 100.0
                 h_copy["updated_at"] = debate_result.debates[-1].created_at if debate_result.debates else None
                 if debate_result.debates:
                     latest = debate_result.debates[-1]

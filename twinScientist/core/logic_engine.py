@@ -437,7 +437,7 @@ class AbductiveReasoner:
                 })
 
             # Bidirectional causality where only one direction expected
-            if "bidirectional" in direction.lower():
+            if direction and "bidirectional" in direction.lower():
                 observations.append({
                     "type": "bidirectional_where_unidirectional_expected",
                     "detail": f"{method} 检测到双向因果 ({direction})，暗示遗漏了反馈回路",
