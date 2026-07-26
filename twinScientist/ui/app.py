@@ -18,6 +18,7 @@ Usage:
 
 import gradio as gr
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,17 @@ class TwinScientistUI:
         lines.append("")
         lines.append("> 上传完成后，文件将自动被科研流水线识别和使用。")
         return "\n".join(lines)
+
+    def validate_api_key(self, key: str) -> str:
+        """Validate and apply the API key."""
+        if not key or not key.strip():
+            return "⚠️ 未设置 API Key。将使用 .env 中的配置（如果存在）。"
+        if not key.startswith("sk-"):
+            return "⚠️ API Key 格式可能不正确（应以 sk- 开头）。"
+        if len(key) < 20:
+            return "⚠️ API Key 太短，可能无效。"
+        os.environ["BAILIAN_API_KEY"] = key.strip()
+        return "✅ API Key 已设置。"
 
     def _get_or_create_session(self, session_id: str) -> dict:
         if session_id not in self.sessions:
@@ -255,6 +267,15 @@ class TwinScientistUI:
             with gr.Row():
                 # Left column: Input controls
                 with gr.Column(scale=1):
+                    with gr.Accordion("⚙️ API 设置", open=False):
+                        api_key_input = gr.Textbox(
+                            label="百炼 API Key",
+                            placeholder="sk-...",
+                            type="password",
+                            value=os.getenv("BAILIAN_API_KEY", ""),
+                            info="阿里云百炼平台 API Key。留空则使用 .env 中的配置。",
+                        )
+                        api_status = gr.Markdown("")
                     domain_input = gr.Textbox(
                         label="学科领域",
                         value="环境—人体关联",
@@ -351,6 +372,12 @@ class TwinScientistUI:
             # ========================================================
             # Event Handlers
             # ========================================================
+            api_key_input.change(
+                fn=self.validate_api_key,
+                inputs=[api_key_input],
+                outputs=[api_status],
+            )
+
             start_btn.click(
                 fn=self.run_research,
                 inputs=[domain_input, question_input, max_iter_slider, auto_approve_cb],
