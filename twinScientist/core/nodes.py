@@ -2464,6 +2464,14 @@ async def node_report_writing(state: AgentState) -> dict:
     logger.info("[ReportWriting] Report generated successfully with real data")
     logger.info(f"[ReportWriting] Final report length={len(report)}, Section 9 present={('以下基于真实数据分析' in report) or ('理论可行性验证框架' in report)}")
 
+    # Inject multi-modal visualizations
+    try:
+        from core.visualization import inject_visualizations
+        report = inject_visualizations(report, state)
+        logger.info("[ReportWriting] Visualizations injected")
+    except Exception as e:
+        logger.warning(f"[ReportWriting] Visualization injection failed: {e}")
+
     return {"final_report": report, "current_action": "report_writing"}
 
 

@@ -72,13 +72,34 @@ logger = logging.getLogger("twinScientist")
 
 
 async def run_research(question: str, domain: str, max_iter: int):
-    """CLI 模式：运行研究循环（含蒙特卡洛 RL 生命周期管理）"""
+    """CLI 模式：运行研究循环"""
     from config.settings import settings
     from core.graph import cognitive_graph
     from output.report_generator import ReportGenerator
+    from core.adaptive import compute_iteration_budget, explain_budget
+    from core.memory import memory as research_memory
 
     domain = domain or "环境—人体关联"
+
+    # --- Adaptive iterations: OpenAI-style test-time compute scaling ---
+    if max_iter <= 3:  # User didn't specify or used default
+        max_iter = compute_iteration_budget(question, domain)
+        logger.info(f"[Adaptive] {explain_budget(question, max_iter)}")
     settings.max_iterations = max_iter
+
+    # --- Recall relevant past research ---
+    past_context = ""
+    try:
+        relevant = research_memory.recall(question, top_k=3)
+        if relevant:
+            past_context = research_memory.format_context(relevant)
+            mem_stats = research_memory.get_stats()
+            logger.info(
+                f"[Memory] Recalled {len(relevant)} past sessions "
+                f"(total memory: {mem_stats['total_sessions']} sessions)"
+            )
+    except Exception as e:
+        logger.debug(f"[Memory] Recall skipped: {e}")
 
     # --- Begin experience tracking for this research session ---
     _sid = None
@@ -105,6 +126,7 @@ async def run_research(question: str, domain: str, max_iter: int):
         "domain": domain,
         "_max_iterations_": max_iter,
         "auto_confirm": True,  # CLI defaults to auto-confirm
+        "user_guidance": past_context if past_context else None,  # Inject past research context
     }
 
     print("=" * 70)
@@ -135,14 +157,43 @@ async def run_research(question: str, domain: str, max_iter: int):
 
     result = None
     try:
+        from core.progress import ProgressDashboard
+        dashboard = ProgressDashboard()
         thread_id = f"cli-session-{uuid.uuid4().hex[:8]}"
         logger.info(f"[CLI] Starting fresh session with thread_id={thread_id}")
-        # LangGraph recursion_limit is overridden to 2000 (200 iterations × ~8 steps/iter)
-        # Each iteration takes ~8 node steps, so use 200 * 10 as safety margin
-        result = await cognitive_graph.ainvoke(
-            initial_state,
-            {"configurable": {"thread_id": thread_id}, "recursion_limit": 2000},
-        )
+
+        # Use astream_events for real-time progress display
+        last_state = {}
+        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 2000}
+        async for event in cognitive_graph.astream_events(initial_state, config, version="v2"):
+            kind = event.get("event", "")
+            name = event.get("name", "")
+
+            if kind == "on_chain_start" and name in (
+                "ethics_check", "literature_review", "hypothesis_generation",
+                "tournament_eval", "experiment_design", "data_analysis",
+                "interpretation", "reviewer_agent", "reflection",
+                "debate_then_terminate", "termination_eval", "report_writing",
+                "pi_agent_meeting", "human_approval", "evolution_manager",
+                "post_report_chat",
+            ):
+                dashboard.on_node_start(name)
+
+            elif kind == "on_chain_end" and name in (
+                "ethics_check", "literature_review", "hypothesis_generation",
+                "tournament_eval", "experiment_design", "data_analysis",
+                "interpretation", "reviewer_agent", "reflection",
+                "debate_then_terminate", "termination_eval", "report_writing",
+                "pi_agent_meeting", "human_approval", "evolution_manager",
+                "post_report_chat",
+            ):
+                output = event.get("data", {}).get("output", {})
+                if isinstance(output, dict):
+                    last_state.update(output)
+                dashboard.on_node_end(name, last_state)
+
+        result = last_state
+        print(dashboard.summary())
 
         # Generate report — prefer final_report from graph (already has real data), else regenerate
         graph_report = result.get("final_report", "")
@@ -163,6 +214,23 @@ async def run_research(question: str, domain: str, max_iter: int):
         print("\n" + report[:2000])
         if len(report) > 2000:
             print(f"\n... (完整报告共 {len(report)} 字符，详见文件)")
+
+        # --- Remember this session for future research ---
+        try:
+            research_memory.remember(thread_id, result)
+            mem_stats = research_memory.get_stats()
+            logger.info(f"[Memory] Session remembered. Total: {mem_stats['total_sessions']} sessions")
+        except Exception as e:
+            logger.debug(f"[Memory] Remember failed: {e}")
+
+        # --- Collect SFT training data ---
+        try:
+            from core.sft_pipeline import sft_collector
+            sft_collector.collect_from_session(result)
+            sft_stats = sft_collector.get_stats()
+            logger.info(f"[SFT] Collected {sum(sft_stats.values())} training examples")
+        except Exception as e:
+            logger.debug(f"[SFT] Collection failed: {e}")
 
         return result
 
