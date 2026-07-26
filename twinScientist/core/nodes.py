@@ -1072,6 +1072,7 @@ async def node_experiment_design(state: AgentState) -> dict:
     # Use real sensor data — randomize to avoid data monotony
     import glob as _glob
     import random as _random
+    experiments = copy.deepcopy(list(state.get("experiment_records", [])))
     sensor_csvs = sorted(_glob.glob(str(Path("data/sensors/*.csv"))))
     # Exclude files already used in previous experiments for diversity
     used_files = {exp.get("input_data_path", "") for exp in experiments if exp.get("input_data_path")}
@@ -1110,7 +1111,6 @@ async def node_experiment_design(state: AgentState) -> dict:
                 tree[i] = matched_hyp
                 break
 
-    experiments = copy.deepcopy(list(state.get("experiment_records", [])))
     experiments.append(experiment_record)
 
     logger.info(f"[ExperimentDesign] Created experiment {exp_id} for hypothesis {hyp['id']}")
