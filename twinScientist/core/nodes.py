@@ -928,9 +928,15 @@ async def node_tournament_eval(state: AgentState) -> dict:
 
     llm = _get_llm()
 
-    # Build bracket description for the LLM prompt
+    # Cap hypotheses to prevent API timeout: sort by confidence, keep top 12
+    if len(hypotheses) > 12:
+        hypotheses.sort(key=lambda h: h.get("confidence_prior", 0), reverse=True)
+        hypotheses = hypotheses[:12]
+        logger.info(f"[TournamentEval] Capped to top 12 hypotheses (from {len(state.get('hypothesis_tree', []))}) to prevent timeout")
+
+    # Build bracket description for the LLM prompt (truncated per hypothesis)
     hyp_list_text = "\n".join(
-        f"{i + 1}. [{h['id']}] **{h.get('title', '?')}**\n   陈述: {h.get('statement', '')[:200]}\n   推理: {h.get('reasoning_chain', '')[:150]}\n   先验置信度: {h.get('confidence_prior', '?')}\n   证据需求: {h.get('evidence_needed', 'N/A')}"
+        f"{i + 1}. [{h['id']}] **{h.get('title', '?')}**\n   陈述: {h.get('statement', '')[:150]}\n   推理: {h.get('reasoning_chain', '')[:100]}\n   先验置信度: {h.get('confidence_prior', '?')}"
         for i, h in enumerate(hypotheses)
     )
 
@@ -1063,10 +1069,17 @@ async def node_experiment_design(state: AgentState) -> dict:
 
     exp_id = f"exp_{uuid.uuid4().hex[:6]}"
 
-    # Use real sensor data if available
+    # Use real sensor data — randomize to avoid data monotony
     import glob as _glob
-    sensor_csvs = _glob.glob(str(Path("data/sensors/*.csv")))
-    input_data_path = sensor_csvs[0] if sensor_csvs else "[DATA_CHANNEL_PLACEHOLDER]"
+    import random as _random
+    sensor_csvs = sorted(_glob.glob(str(Path("data/sensors/*.csv"))))
+    # Exclude files already used in previous experiments for diversity
+    used_files = {exp.get("input_data_path", "") for exp in experiments if exp.get("input_data_path")}
+    available = [f for f in sensor_csvs if f not in used_files]
+    if not available:
+        available = sensor_csvs  # fallback: reuse if all exhausted
+    input_data_path = _random.choice(available) if available else "[DATA_CHANNEL_PLACEHOLDER]"
+    logger.info(f"[ExperimentDesign] Selected data file: {input_data_path} (from {len(available)} available, {len(used_files)} used)")
 
     experiment_record = {
         "id": exp_id,
@@ -1173,8 +1186,24 @@ async def node_data_analysis(state: AgentState) -> dict:
                         ts_data[poll].append(float(val))
 
                 # Use primary environmental variables for causal inference
-                x_key = "T" if "T" in ts_data and ts_data["T"] else pollutants[0]
-                y_key = "CO2" if "CO2" in ts_data and ts_data["CO2"] else (pollutants[1] if len(pollutants) > 1 else x_key)
+                # Rotate causal pairs across experiments to avoid data monotony
+                exp_count = len([e for e in experiments if e.get("results", {}).get("analysis_complete")])
+                pair_options = []
+                if "T" in ts_data and "CO2" in ts_data:
+                    pair_options.append(("T", "CO2", "Temperature → CO2"))
+                if "T" in ts_data and "VOC" in ts_data:
+                    pair_options.append(("T", "VOC", "Temperature → VOC"))
+                if "CO2" in ts_data and "VOC" in ts_data:
+                    pair_options.append(("CO2", "VOC", "CO2 → VOC"))
+                if "H" in ts_data and "T" in ts_data:
+                    pair_options.append(("H", "T", "Humidity → Temperature"))
+                if len(pair_options) >= 2:
+                    pair_idx = exp_count % len(pair_options)
+                    x_key, y_key, pair_label = pair_options[pair_idx]
+                    logger.info(f"[DataAnalysis] Rotated causal pair: {pair_label} (experiment #{exp_count})")
+                else:
+                    x_key = "T" if "T" in ts_data and ts_data["T"] else pollutants[0]
+                    y_key = "CO2" if "CO2" in ts_data and ts_data["CO2"] else (pollutants[1] if len(pollutants) > 1 else x_key)
 
                 x = [v for v in ts_data[x_key] if v is not None][:500]  # cap at 500 samples
                 y = [v for v in ts_data[y_key] if v is not None][:500]
@@ -1832,61 +1861,68 @@ async def node_termination_eval(state: dict) -> dict:
     hypo_converged = hyp_space_size <= 2 and hypo_confidence_max > 0.7
     logger.info(f"[TerminationEval] Hyp space: {hyp_space_size} active, conf={hypo_confidence_max:.3f}, converged={hypo_converged}")
 
-    # --- Combined score with bonuses ---
-    # Weights: convergence 40%, evidence 30%, exploration 30% → sum = 1.0
-    base_combined = min(convergence * 0.40 + evidence_str * 0.30 + (0.8 if exploration_exhausted else 0.0) * 0.30, 1.0)
-    bonus = 0.0
-    if methodology_status == "stable": bonus += 0.05
-    if evidence_full: bonus += 0.05
-    if hypo_converged: bonus += 0.08
-    if transfer_proposals: bonus += 0.03
-    adjusted_combined = round(min(base_combined + bonus, 1.0), 3)
+    # --- Combined score: redesigned for evidence-first evaluation ---
+    # OLD formula (convergence-dependent, broken): convergence*0.40 + evidence*0.30 + exploration*0.30
+    # NEW formula (evidence-first, multi-signal): evidence*0.40 + review*0.25 + methodology*0.15 + convergence*0.10 + exploration*0.10
+    max_review_score = max((r.get("total_score", 0) for r in state.get("review_records", [{}])), default=0) / 100.0
+    methodology_bonus = 0.8 if methodology_status == "stable" else (0.5 if "revisiting" in methodology_status else 0.2)
+    combined = round(
+        evidence_str * 0.40 +
+        max_review_score * 0.25 +
+        methodology_bonus * 0.15 +
+        convergence * 0.10 +
+        (0.8 if exploration_exhausted else 0.0) * 0.10,
+        3
+    )
 
-    # --- Termination conditions ---
+    # --- Termination conditions (redesigned) ---
+
+    # Multi-signal check: evidence strong AND review passed
+    evidence_strong = evidence_str > 0.7
+    review_passed = max_review_score > 0.6
+    method_mature = methodology_status in ("stable", "shifting_but_revisiting")
+    dims_sufficient = evidence_dim_count >= 2
+
+    # Stagnation detection: combined score hasn't improved in 3 rounds
+    prev_scores: list = state.get("_term_combined_scores", [])
+    prev_scores = (prev_scores + [combined])[-3:]
+    stagnated = len(prev_scores) >= 3 and max(prev_scores) - min(prev_scores) < 0.05
+
     should_terminate = False
     stop_reason = ""
 
-    # A: Semantic convergence stable
-    if convergence >= 0.85 and len(convergence_history) >= 2:
-        last_two = convergence_history[-2:]
-        if abs(last_two[0] - last_two[1]) < 0.05:
-            should_terminate = True
-            stop_reason = f"Convergence stable: now={convergence:.1%}, prev={last_two[0]:.1%}, delta={abs(last_two[0]-last_two[1]):.1%} (<5%)"
-            logger.info(f"[TerminationEval] CONVERGENCE_STABLE: {stop_reason}")
-
-    # B: Max rounds
-    max_iters = state.get("_max_iterations_", 200)
-    if iteration >= max_iters:
-        should_terminate = True
-        stop_reason = f"Max iterations reached ({max_iters}/{max_iters})"
-        logger.info(f"[TerminationEval] MAX_ROUNDS_REACHED: {stop_reason}")
-
-    # C: Adjusted combined score
-    if adjusted_combined >= 0.85 and not should_terminate:
-        should_terminate = True
-        stop_reason = f"Combined score high ({adjusted_combined:.3f} >= 0.85), sufficient evidence to terminate"
-        logger.info(f"[TerminationEval] COMBINED_SCORE_HIGH: {stop_reason}")
-
-    # D: Early stop — all dimensions aligned
-    if evidence_full and hypo_converged and methodology_status == "stable" and not should_terminate:
+    # A: Gold standard — evidence + review + method + dimensions all aligned
+    if evidence_strong and review_passed and method_mature and dims_sufficient:
         should_terminate = True
         stop_reason = (
-            f"Multi-dim early stop: dims={evidence_dim_count}/3 full, "
-            f"hypo_space={hyp_space_size} focused, method=stable"
+            f"All signals aligned: evidence={evidence_str:.3f}, review={max_review_score:.0%}, "
+            f"method={methodology_status}, dims={evidence_dim_count}"
         )
-        logger.info(f"[TerminationEval] MULTIDIM_EARLY_STOP: {stop_reason}")
 
-    if transfer_proposals:
-        logger.info(
-            f"[TerminationEval] Top transfer: {transfer_proposals[0]['method']} "
-            f"-> {transfer_proposals[0]['transfer_to']} "
-            f"(rel={transfer_proposals[0]['relevance']:.3f})"
-        )
+    # B: Evidence alone is overwhelming (strength > 0.9)
+    elif evidence_str > 0.9 and review_passed:
+        should_terminate = True
+        stop_reason = f"Overwhelming evidence (strength={evidence_str:.3f}) with acceptable review ({max_review_score:.0%})"
+
+    # C: Max rounds (hard safety net)
+    elif iteration >= max_iters:
+        should_terminate = True
+        stop_reason = f"Max iterations reached ({max_iters}/{max_iters})"
+
+    # D: Stagnation — no improvement for 3 rounds, cut losses
+    elif stagnated and iteration >= 3:
+        should_terminate = True
+        stop_reason = f"Stagnated: combined score stable at {combined:.3f} for 3 rounds"
+
+    # E: Combined score high enough (lowered from 0.85 to 0.65)
+    elif combined >= 0.65:
+        should_terminate = True
+        stop_reason = f"Combined score sufficient ({combined:.3f} >= 0.65)"
 
     if not should_terminate:
         stop_reason = (
-            f"Continue: conv={convergence:.1%}, combined={adjusted_combined:.3f}, "
-            f"methods={methodology_status}, dims={evidence_dim_count}"
+            f"Continue: evidence={evidence_str:.3f}, review={max_review_score:.0%}, "
+            f"combined={combined:.3f}, methods={methodology_status}, dims={evidence_dim_count}"
         )
         logger.info(f"[TerminationEval] CONTINUE: {stop_reason}")
 
@@ -1906,7 +1942,7 @@ async def node_termination_eval(state: dict) -> dict:
         "prev_round_winner_statement": current_statement,
         "evidence_strength": round(evidence_str, 3),
         "exploration_exhausted": exploration_exhausted,
-        "combined_score": adjusted_combined,
+        "combined_score": combined,
         "should_terminate": should_terminate,
         "stop_reason": stop_reason,
         "methodology_status": methodology_status,
@@ -1926,6 +1962,7 @@ async def node_termination_eval(state: dict) -> dict:
         "iteration": state.get("iteration", 0) + (0 if should_terminate else 1),
         "_max_iterations_": state.get("_max_iterations_", 200),
         "consecutive_failures": state.get("consecutive_failures", 0),
+        "_term_combined_scores": prev_scores,
     }
 
 # ============================================================
