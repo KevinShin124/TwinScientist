@@ -1861,70 +1861,68 @@ async def node_termination_eval(state: dict) -> dict:
     hypo_converged = hyp_space_size <= 2 and hypo_confidence_max > 0.7
     logger.info(f"[TerminationEval] Hyp space: {hyp_space_size} active, conf={hypo_confidence_max:.3f}, converged={hypo_converged}")
 
-    # --- Combined score: redesigned for evidence-first evaluation ---
-    # OLD formula (convergence-dependent, broken): convergence*0.40 + evidence*0.30 + exploration*0.30
-    # NEW formula (evidence-first, multi-signal): evidence*0.40 + review*0.25 + methodology*0.15 + convergence*0.10 + exploration*0.10
-    max_review_score = max((r.get("total_score", 0) for r in state.get("review_records", [{}])), default=0) / 100.0
-    methodology_bonus = 0.8 if methodology_status == "stable" else (0.5 if "revisiting" in methodology_status else 0.2)
-    combined = round(
-        evidence_str * 0.40 +
-        max_review_score * 0.25 +
-        methodology_bonus * 0.15 +
-        convergence * 0.10 +
-        (0.8 if exploration_exhausted else 0.0) * 0.10,
-        3
+    # ============================================================
+    # TERMINATION DECISION — Budget-first with quality early-exit
+    #
+    # Design principle (from Sakana AI-Scientist, Google Co-Scientist):
+    #   Primary: Budget-based. Run N rounds, collect best results.
+    #   Secondary: Quality-based early exit if evidence is sufficient.
+    #   Safety: Stagnation detection to prevent wasting compute.
+    #
+    # This is NOT convergence-based because the system generates NEW
+    # hypotheses each round — convergence would require stability,
+    # which contradicts the goal of exploration.
+    # ============================================================
+
+    # --- Compute quality signals ---
+    approved_hyps = [h for h in hypotheses if h.get("status") == "approved_by_reviewer"]
+    approved_count = len(approved_hyps)
+    best_confidence = max(
+        (h.get("confidence_posterior", h.get("confidence_prior", 0)) for h in approved_hyps),
+        default=0.0
     )
+    review_scores = [r.get("total_score", 0) for r in state.get("review_records", [])]
+    best_review = max(review_scores) if review_scores else 0
+    avg_review = sum(review_scores[-3:]) / max(len(review_scores[-3:]), 1) if review_scores else 0
 
-    # --- Termination conditions (redesigned) ---
-
-    # Multi-signal check: evidence strong AND review passed
-    evidence_strong = evidence_str > 0.7
-    review_passed = max_review_score > 0.6
-    method_mature = methodology_status in ("stable", "shifting_but_revisiting")
-    dims_sufficient = evidence_dim_count >= 2
-
-    # Stagnation detection: combined score hasn't improved in 3 rounds
-    prev_scores: list = state.get("_term_combined_scores", [])
-    prev_scores = (prev_scores + [combined])[-3:]
-    stagnated = len(prev_scores) >= 3 and max(prev_scores) - min(prev_scores) < 0.05
-
+    # --- Decision ---
+    max_iters = state.get("_max_iterations_", 200)
+    iteration = state.get("iteration", 0)
     should_terminate = False
     stop_reason = ""
 
-    # A: Gold standard — evidence + review + method + dimensions all aligned
-    if evidence_strong and review_passed and method_mature and dims_sufficient:
+    # === PRIMARY: Budget-based (how ALL major AI Scientists work) ===
+    if iteration >= max_iters:
+        should_terminate = True
+        stop_reason = f"Budget exhausted: {iteration}/{max_iters} iterations completed"
+
+    # === SECONDARY: Quality-based early exit (stop early if results are good) ===
+    elif iteration >= 3 and approved_count >= 2 and evidence_str > 0.7 and best_review >= 70:
         should_terminate = True
         stop_reason = (
-            f"All signals aligned: evidence={evidence_str:.3f}, review={max_review_score:.0%}, "
-            f"method={methodology_status}, dims={evidence_dim_count}"
+            f"Early exit: {approved_count} approved hypotheses, "
+            f"evidence={evidence_str:.3f}, best_review={best_review}, "
+            f"best_confidence={best_confidence:.0%} — sufficient quality achieved"
         )
 
-    # B: Evidence alone is overwhelming (strength > 0.9)
-    elif evidence_str > 0.9 and review_passed:
-        should_terminate = True
-        stop_reason = f"Overwhelming evidence (strength={evidence_str:.3f}) with acceptable review ({max_review_score:.0%})"
-
-    # C: Max rounds (hard safety net)
-    elif iteration >= max_iters:
-        should_terminate = True
-        stop_reason = f"Max iterations reached ({max_iters}/{max_iters})"
-
-    # D: Stagnation — no improvement for 3 rounds, cut losses
-    elif stagnated and iteration >= 3:
-        should_terminate = True
-        stop_reason = f"Stagnated: combined score stable at {combined:.3f} for 3 rounds"
-
-    # E: Combined score high enough (lowered from 0.85 to 0.65)
-    elif combined >= 0.65:
-        should_terminate = True
-        stop_reason = f"Combined score sufficient ({combined:.3f} >= 0.65)"
+    # === SAFETY: Stagnation detection ===
+    elif iteration >= 4:
+        recent_reviews = review_scores[-3:] if len(review_scores) >= 3 else review_scores
+        if recent_reviews and max(recent_reviews) - min(recent_reviews) < 5:
+            should_terminate = True
+            stop_reason = (
+                f"Stagnation: review scores stable at ~{avg_review:.0f} "
+                f"for last {len(recent_reviews)} rounds — no further improvement expected"
+            )
 
     if not should_terminate:
         stop_reason = (
-            f"Continue: evidence={evidence_str:.3f}, review={max_review_score:.0%}, "
-            f"combined={combined:.3f}, methods={methodology_status}, dims={evidence_dim_count}"
+            f"Continue round {iteration+1}/{max_iters}: "
+            f"approved={approved_count}, evidence={evidence_str:.3f}, "
+            f"best_review={best_review}, best_confidence={best_confidence:.0%}"
         )
-        logger.info(f"[TerminationEval] CONTINUE: {stop_reason}")
+
+    logger.info(f"[TerminationEval] {'TERMINATE' if should_terminate else 'CONTINUE'}: {stop_reason}")
 
     # --- Pruning ---
     tree = copy.deepcopy([dict(h) for h in hypotheses])
@@ -1942,7 +1940,7 @@ async def node_termination_eval(state: dict) -> dict:
         "prev_round_winner_statement": current_statement,
         "evidence_strength": round(evidence_str, 3),
         "exploration_exhausted": exploration_exhausted,
-        "combined_score": combined,
+        "combined_score": round(evidence_str * 0.5 + (best_review / 100.0) * 0.3 + convergence * 0.2, 3),
         "should_terminate": should_terminate,
         "stop_reason": stop_reason,
         "methodology_status": methodology_status,
@@ -1959,10 +1957,9 @@ async def node_termination_eval(state: dict) -> dict:
         "__decision": "TERMINATE" if should_terminate else "CONTINUE",
         "current_action": "termination_eval",
         "_cross_disciplinary_proposals": transfer_proposals,
-        "iteration": state.get("iteration", 0) + (0 if should_terminate else 1),
+        "iteration": state.get("iteration", 0),
         "_max_iterations_": state.get("_max_iterations_", 200),
         "consecutive_failures": state.get("consecutive_failures", 0),
-        "_term_combined_scores": prev_scores,
     }
 
 # ============================================================

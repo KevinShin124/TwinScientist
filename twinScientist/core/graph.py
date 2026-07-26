@@ -120,43 +120,18 @@ logger = logging.getLogger(__name__)
 
 def _after_reviewer_route(state: AgentState) -> str:
     """
-    After reviewer_agent finishes, delegate to orchestrator stop-check.
+    After reviewer_agent: always go to debate → termination_eval.
 
-    Routing logic:
-      0) Minimum rounds guardrail — force at least min_rounds iterations
-         before ANY early termination. Prevents single-pass false positives.
-      1) Stop conditions met (any reason) → debate_orchestrator first,
-         then termination_eval → report_writing
-      2) Otherwise → reflection (next round)
+    termination_eval is the SINGLE source of truth for stop/continue.
+    This function no longer duplicates termination logic.
 
-    Key design: ALL stop paths funnel through debate first when we have
-    hypotheses to stress-test. This ensures adversarial review before
-    proceeding to report writing or termination.
+    Design principle (from Sakana AI-Scientist, Google Co-Scientist):
+    Budget-first termination with quality-based early exit. No convergence
+    hacks, no complex formula tuning. Simple, predictable, correct.
     """
-    # === Guardrail: minimum rounds before any termination ===
-    min_rounds = int(os.getenv("MIN_REFLECTION_ROUNDS", "0"))
-    current_iter = state.get("iteration", 0)
-    if current_iter < min_rounds:
-        logger.info(
-            f"[AfterReviewer] MIN_ROUNDS NOT MET: iteration={current_iter}<{min_rounds}, "
-            f"forcing reflection instead of stopping"
-        )
-        _mc_log_and_recommend(state, "reflection")
-        return "reflection"
-
-    checks = _check_orchestrator_stop_conditions(state)
-
-    if checks["stop"]:
-        # Stop condition met → run debate first (adversarial review), then terminate
-        logger.info(f"[AfterReviewer] STOP CONDITION MET: {checks['reason']}")
-        action = "debate_then_terminate"
-    else:
-        # Not stopping → direct path to reflection (no detour through debate)
-        logger.info(f"[AfterReviewer] CONTINUE: {checks['reason']}")
-        action = "reflection"
-
-    # Log this routing decision to MC experience store
-    _mc_log_and_recommend(state, action)
+    # Always run debate before termination evaluation
+    logger.info(f"[AfterReviewer] Routing to debate → termination_eval (iteration={state.get('iteration', 0)})")
+    return "debate_then_terminate"
     return action
 
 
@@ -250,13 +225,11 @@ def build_cognitive_graph() -> "CompiledGraph":
     # Interpretation → Reviewer (deterministic)
     workflow.add_edge("interpretation", "reviewer_agent")
 
-    # Reviewer → Orchestrator: debate_first_if_stopping, reflection_if_continuing
+    # Reviewer → always goes to debate, then termination_eval decides
     workflow.add_conditional_edges(
         "reviewer_agent",
         _after_reviewer_route,
         {
-            "reflection": "reflection",
-            "report_writing": "report_writing",  # Legacy shortcut (score high enough)
             "debate_then_terminate": "debate_then_terminate",
         },
     )
@@ -281,13 +254,13 @@ def build_cognitive_graph() -> "CompiledGraph":
         },
     )
 
-    # Termination evaluation → either write report or explore more
+    # Termination → report_writing (stop) or reflection (continue loop)
     workflow.add_conditional_edges(
         "termination_eval",
         route_after_termination,
         {
             "report_writing": "report_writing",
-            "hypothesis_generation": "hypothesis_generation",
+            "reflection": "reflection",
         },
     )
 

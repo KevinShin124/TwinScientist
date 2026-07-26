@@ -660,77 +660,16 @@ def route_after_reflection(state: AgentState) -> str:
 
 def route_after_termination(state: AgentState) -> str:
     """
-    终止决策路由 —— 严格优先级顺序 + MC 策略影响
+    After termination_eval: read the single-source-of-truth decision.
 
-    P0: 紧急出口 — 超出 max_iterations+2 轮，强制停止（安全网）
-    P1: 迭代次数硬上限 (绝对天花板)
-    P2: 读取 node_termination_eval 的计算结论 (优先复用，不复算)
-    P3: 独立综合评分回退 (原始行为的最后兜底)
-    MC: 在 P2/P3 分支中，用 MC 策略影响"继续 vs 终止"决策
+    termination_eval is the ONLY place that decides stop/continue.
+    This function just reads its verdict.
     """
-    max_iters = state.get("_max_iterations_", 200)
-    iteration = state.get("iteration", 0)
-
-    # === P0: 紧急出口 — 超出上限+2轮，不跟你讲道理了 ===
-    if iteration >= max_iters + 2:
-        logger.warning(
-            f"[RouteAfterTerm] EMERGENCY EXIT: iteration={iteration} >= max_iterations({max_iters})+2, "
-            f"forcing report_writing"
-        )
-        action = "report_writing"
-        _mc_log_and_recommend(state, action)
-        return action
-
-    # === P1: 绝对天花板 ===
-    if iteration >= max_iters:
-        action = "report_writing"
-        _mc_log_and_recommend(state, action)
-        return action
-
-    # === P2: 读取 TerminationEval 已经算好的结论 ===
     term_result = state.get("_termination_result")
-    if term_result:
-        should_term = term_result.get("should_terminate", False)
-        logger.info(
-            f"[RouteAfterTerm] Taking TerminationEval verdict "
-            f"(should_terminate={should_term}): {term_result.get('stop_reason', '?')}"
-        )
-        if should_term:
-            action = "report_writing"
-            # Reset anti-loop tracking on actual termination
-            state["_term_continue_scores"] = []
-        else:
-            # --- Anti-loop: detect repeated "continue" with unchanged combined_score ---
-            curr_score = term_result.get("combined_score", 0.0)
-            prev_scores: list = state.get("_term_continue_scores", [])
-            prev_scores = (prev_scores + [curr_score])[-3:]  # sliding window, keep last 3
-            state["_term_continue_scores"] = prev_scores
+    if term_result and term_result.get("should_terminate"):
+        logger.info(f"[RouteAfterTerm] TERMINATE: {term_result.get('stop_reason', '?')}")
+        return "report_writing"
 
-            if len(prev_scores) >= 2 and abs(prev_scores[-1] - prev_scores[-2]) < 0.02:
-                logger.warning(
-                    f"[RouteAfterTerm] ANTI-LOOP: combined_score={curr_score:.3f} "
-                    f"unchanged across {len(prev_scores)} rounds, forcing termination"
-                )
-                action = "report_writing"
-            else:
-                # MC influence: might override "continue" to "terminate" or vice versa
-                action = _mc_influence_route(
-                    state, "hypothesis_generation",
-                    ["hypothesis_generation", "report_writing", "termination_eval"]
-                )
-        _mc_log_and_recommend(state, action)
-        return action
-
-    # === P3: 回退到原始独立计算 ===
-    convergence = state.get("convergence_score", 0.0)
-    evidence_chains = state.get("evidence_chains", [])
-    exploration_done = state.get("exploration_exhausted", False)
-    evidence_str = sum(e.get("strength", 0.5) for e in evidence_chains) / max(len(evidence_chains), 1)
-    combined = convergence * 0.4 + evidence_str * 0.3 + (0.8 if exploration_done else 0.0) * 0.3
-
-    if combined >= 0.85:
-        action = "report_writing"
-    else:
-        action = "hypothesis_generation"
-    _mc_log_and_recommend(state, action)
-    return action
+    # Continue: go through reflection (which does root-cause analysis + iteration++)
+    logger.info(f"[RouteAfterTerm] CONTINUE: {term_result.get('stop_reason', '?') if term_result else 'unknown'}")
+    return "reflection"
