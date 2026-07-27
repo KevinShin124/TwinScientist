@@ -311,7 +311,7 @@ class TwinScientistUI:
         return "\n".join(lines)
 
     def save_report(self, report_content: str, save_path: str) -> str:
-        """Save the full report to the specified path."""
+        """Save the full report to the specified path. Supports .md and .html."""
         if not report_content or not report_content.strip():
             return "⚠️ No report to save. Run research first."
         if not save_path or not save_path.strip():
@@ -320,8 +320,16 @@ class TwinScientistUI:
             from pathlib import Path
             path = Path(save_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(report_content, encoding="utf-8")
-            return f"✅ Report saved to `{path}` ({len(report_content)} chars)"
+
+            if path.suffix.lower() == ".html":
+                from output.report_generator import ReportGenerator
+                gen = ReportGenerator(str(path.parent))
+                import asyncio
+                result = asyncio.run(gen.save_html(report_content, path.name))
+                return result if result.startswith("⚠️") or result.startswith("❌") else f"✅ HTML saved to `{result}` ({len(report_content)} chars) — open in browser → Print → Save as PDF"
+            else:
+                path.write_text(report_content, encoding="utf-8")
+                return f"✅ Report saved to `{path}` ({len(report_content)} chars)"
         except Exception as e:
             return f"❌ Save failed: {str(e)[:200]}"
 

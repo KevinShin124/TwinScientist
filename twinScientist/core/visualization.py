@@ -190,6 +190,68 @@ def render_convergence_chart(convergence_history: list[float]) -> str:
     return "\n".join(lines)
 
 
+# ═══════════════════════════════════════════════════════════════
+# Mermaid Diagram Generators
+# ═══════════════════════════════════════════════════════════════
+
+def generate_hypothesis_mermaid(hypotheses: list[dict], max_display: int = 10) -> str:
+    """Generate a Mermaid mindmap for the hypothesis tree."""
+    active = [h for h in hypotheses if h.get("status") not in ("pruned", "refuted", "refuted_in_tournament")]
+    if not active:
+        return ""
+
+    lines = ["```mermaid", "mindmap", "  root((Hypotheses))"]
+    for h in active[:max_display]:
+        title = h.get("title", "?")[:40].replace('"', "'")
+        status = "✅" if h.get("tournament_won") else ("🔬" if h.get("status") == "active" else "📝")
+        elo = h.get("elo_score", "")
+        elo_str = f" [{elo}]" if elo else ""
+        lines.append(f"    {status} {title}{elo_str}")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def generate_evidence_mermaid(evidence_chains: list[dict]) -> str:
+    """Generate a Mermaid flowchart for the evidence chain."""
+    causal = [e for e in evidence_chains if e.get("type") == "causal_inference"]
+    if not causal:
+        return ""
+
+    lines = ["```mermaid", "flowchart LR"]
+    for i, ev in enumerate(causal[:5]):
+        method = ev.get("method_used", "?").upper()
+        direction = ev.get("causal_direction", "X→Y") or "X→Y"
+        strength = ev.get("strength", 0)
+        color = "#2e7d32" if strength > 0.7 else "#f9a825" if strength > 0.4 else "#c62828"
+        parts = direction.split("→")
+        if len(parts) == 2:
+            x, y = parts[0].strip(), parts[1].strip()
+            lines.append(f"    {x} -->|{method} {strength:.2f}| {y}")
+            lines.append(f"    style {x} fill:#e3f2fd")
+            lines.append(f"    style {y} fill:#fff3e0")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def generate_tournament_mermaid(elimination_records: list[dict], winner_id: str) -> str:
+    """Generate a Mermaid bracket for the tournament."""
+    if not elimination_records:
+        return ""
+
+    lines = ["```mermaid", "flowchart TD"]
+    # Show winner at top
+    lines.append(f"    Winner[🏆 {winner_id[:8]}]")
+    lines.append("    style Winner fill:#ffd700,stroke:#333")
+
+    for i, rec in enumerate(elimination_records[:8]):
+        loser = rec.get("eliminated_id", "?")[:8]
+        reason = rec.get("reason", "")[:30].replace('"', "'")
+        lines.append(f"    Match{i}[{loser}] -- '{reason}' --> Winner")
+        lines.append(f"    style Match{i} fill:#ffcdd2")
+    lines.append("```")
+    return "\n".join(lines)
+
+
 def inject_visualizations(report: str, state: dict) -> str:
     """
     Inject visualizations into the report at appropriate locations.

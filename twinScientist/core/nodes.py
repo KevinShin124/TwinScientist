@@ -596,6 +596,14 @@ async def node_literature_review(state: AgentState) -> dict:
         "fact_extraction": validated_facts,
         "_literature_done": True,
         "_literature_sources": sources_used if sources_used else ["fallback"],
+        "_novelty_check": {
+            "papers_found": len(papers),
+            "verified_facts": verified_count,
+            "total_facts": len(validated_facts),
+            "sources": sources_used if sources_used else ["fallback"],
+            "note": ("Novelty can be assessed against verified literature" if verified_count > 0
+                     else "Literature search returned no verified results — novelty cannot be confirmed")
+        },
         "current_action": "literature_review",
         "_max_iterations_": max_iters,
         "iteration": curr_iter,
