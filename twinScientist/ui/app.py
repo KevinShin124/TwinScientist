@@ -198,6 +198,10 @@ class TwinScientistUI:
         report_content = ""
         hypothesis_tree = []
         debate_records = []
+        completed_nodes = []
+        node_times = {}
+        import time as _time
+        _start_time = _time.time()
         if self.agent_app:
             try:
                 thread_id = f"ui-session-{uuid.uuid4().hex[:8]}"
@@ -209,6 +213,14 @@ class TwinScientistUI:
                     if isinstance(event, dict):
                         node_name = list(event.keys())[0]
                         node_data = event[node_name]
+
+                        # Track completed nodes for progress visualization
+                        if node_name not in completed_nodes:
+                            completed_nodes.append(node_name)
+                            node_times[node_name] = _time.time() - _start_time
+
+                        # Build progress visualization
+                        progress_md_content = self._build_progress_panel(completed_nodes, node_times, _start_time)
 
                         # Extract report if generated
                         if "final_report" in node_data:
@@ -226,7 +238,7 @@ class TwinScientistUI:
 
                         # Stream structured events for UI consumption
                         log_line = f"[EVENT]{json.dumps({'node': node_name, 'state': node_data}, ensure_ascii=False)}\n"
-                        yield log_line, "", "", hypo_md, debate_md, report_content
+                        yield log_line, "", progress_md_content, hypo_md, debate_md, report_content
                     else:
                         yield f"{event}\n", "", "", "", "", report_content
 
@@ -259,6 +271,44 @@ class TwinScientistUI:
                 "",
                 "",
             )
+
+    def _build_progress_panel(self, completed_nodes: list, node_times: dict, start_time: float) -> str:
+        """Build a visual progress panel showing pipeline node status."""
+        import time as _time
+        all_nodes = [
+            ("ethics_check", "Ethics", "伦理审查"),
+            ("literature_review", "Literature", "文献调研"),
+            ("hypothesis_generation", "Hypotheses", "假设生成"),
+            ("tournament_eval", "Tournament", "淘汰赛"),
+            ("experiment_design", "Experiment", "实验设计"),
+            ("data_analysis", "Data Analysis", "数据分析"),
+            ("interpretation", "Interpret", "结果解读"),
+            ("reviewer_agent", "Review", "五维评审"),
+            ("debate_then_terminate", "Debate", "智能体辩论"),
+            ("termination_eval", "Terminate", "终止评估"),
+            ("report_writing", "Report", "报告撰写"),
+            ("pi_agent_meeting", "PI Meeting", "PI 总结"),
+            ("human_approval", "HITL", "人机审核"),
+            ("evolution_manager", "Evolution", "自我进化"),
+            ("post_report_chat", "Summary", "研究总结"),
+        ]
+
+        elapsed = _time.time() - start_time
+        lines = [f"### Pipeline Progress ({len(completed_nodes)}/{len(all_nodes)} nodes, {elapsed:.0f}s)", ""]
+
+        for node_id, short_en, short_zh in all_nodes:
+            if node_id in completed_nodes:
+                idx = completed_nodes.index(node_id) + 1
+                t = node_times.get(node_id, 0)
+                lines.append(f"✅ `{idx:02d}` **{short_en}** / {short_zh} — *{t:.0f}s*")
+            elif node_id == (all_nodes[len(completed_nodes)][0] if len(completed_nodes) < len(all_nodes) else ""):
+                lines.append(f"🔄 `{len(completed_nodes)+1:02d}` **{short_en}** / {short_zh} — *running...*")
+            else:
+                lines.append(f"⬜ `--` {short_en} / {short_zh}")
+
+        lines.append("")
+        lines.append(f"⏱️ **Elapsed**: {elapsed:.0f}s")
+        return "\n".join(lines)
 
     def save_report(self, report_content: str, save_path: str) -> str:
         """Save the full report to the specified path."""
