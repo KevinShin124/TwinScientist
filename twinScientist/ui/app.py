@@ -109,6 +109,12 @@ class TwinScientistUI:
         if len(key) < 20:
             return "⚠️ API key too short, may be invalid."
         os.environ["BAILIAN_API_KEY"] = key.strip()
+        # Also update the settings singleton so nodes use the correct key
+        try:
+            from config.settings import settings
+            settings.bailian_api_key = key.strip()
+        except Exception:
+            pass
         return "✅ API key configured."
 
     def _get_or_create_session(self, session_id: str) -> dict:
@@ -143,6 +149,12 @@ class TwinScientistUI:
         # Apply API key from UI if provided
         if api_key and api_key.strip():
             os.environ["BAILIAN_API_KEY"] = api_key.strip()
+            # Also update the settings singleton so all nodes use the correct key
+            try:
+                from config.settings import settings
+                settings.bailian_api_key = api_key.strip()
+            except Exception:
+                pass
 
         api_key_final = os.getenv("BAILIAN_API_KEY", "")
         if not api_key_final or not api_key_final.strip():
