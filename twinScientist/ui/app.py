@@ -295,7 +295,7 @@ class TwinScientistUI:
                 model=settings.model_name,
             )
 
-            chat_agent = ChatAgent(llm_client)
+            chat_agent = ChatAgent()
             state = self.last_state_update or {}
             action = state.get("current_action", "")
 
