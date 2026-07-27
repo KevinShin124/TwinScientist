@@ -140,6 +140,7 @@ class TwinScientistUI:
     ):
         """Launch research pipeline with streaming output and live preview."""
         import glob as _glob
+        import uuid
 
         # === Pre-flight checks ===
         if not research_question or not research_question.strip():
@@ -194,10 +195,11 @@ class TwinScientistUI:
         report_content = ""
         if self.agent_app:
             try:
+                thread_id = f"ui-session-{uuid.uuid4().hex[:8]}"
                 async for event in self.agent_app.astream(
                     initial_state,
                     stream_mode="updates",
-                    config={"configurable": {"recursion_limit": max_iterations * 10}},
+                    config={"configurable": {"thread_id": thread_id}, "recursion_limit": max_iterations * 10},
                 ):
                     if isinstance(event, dict):
                         node_name = list(event.keys())[0]
