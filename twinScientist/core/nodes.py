@@ -548,48 +548,70 @@ async def node_literature_review(state: AgentState) -> dict:
     # ----------------------------------------------------------
     # Step 5: Auto-build Knowledge Graph (enhanced)
     # ----------------------------------------------------------
-    kg_raw = nx.DiGraph()
-    existing_kg = state.get("knowledge_graph", {})
-    if isinstance(existing_kg, dict):
-        for node_info in existing_kg.get("nodes", []):
-            kg_raw.add_node(node_info["id"], type=node_info.get("type", "unknown"))
-        for u, v, relation in existing_kg.get("edges", []):
-            kg_raw.add_edge(u, v, relation=relation)
-    if not kg_raw.nodes():
+    try:
+        kg_raw = nx.DiGraph()
+        existing_kg = state.get("knowledge_graph", {})
+        if isinstance(existing_kg, dict):
+            for node_info in existing_kg.get("nodes", []):
+                kg_raw.add_node(node_info["id"], type=node_info.get("type", "unknown"))
+            for u, v, relation in existing_kg.get("edges", []):
+                kg_raw.add_edge(u, v, relation=relation)
+        if not kg_raw.nodes():
+            kg_raw.add_node("Environment-Human_Association", type="topic")
+
+        # Add entity keywords from facts
+        ENTITY_KEYWORDS = {
+            "variable": ["temperature", "湿度", "CO₂", "pm2.5", "voc", "臭氧", "humidity",
+                          "noise", "光照", "air_quality", "气压"],
+            "biomarker": ["hrv", "sdnn", "rmssd", "心率变异性", "血氧", "spo2", "ppg",
+                           "血压", "皮质醇", "heart_rate", "cortisol"],
+            "population": ["老年人", "儿童", "办公室工人", "孕妇", "elderly", "children",
+                            "office_worker"],
+            "method": ["ccm", "格兰杰", "granger", "pc-fci", "psm", "贝叶斯网络",
+                        "因果推断", "bayesian"],
+        }
+
+        for fact in validated_facts:
+            fact_text = fact.get("fact", "")
+            for entity_type, keywords in ENTITY_KEYWORDS.items():
+                matched = [kw for kw in keywords if kw.lower() in fact_text.lower()]
+                if matched:
+                    kg_raw.add_node(matched[0], type=entity_type)
+                    kg_raw.add_edge("Environment-Human_Association", matched[0],
+                                    relation="classified_as", entity_type=entity_type)
+
+        # Also add nodes from search results (author names, journals, topics)
+        for paper in papers[:5]:
+            if paper.authors:
+                author_name = paper.authors[0].split(",")[-1].strip().split()[0]
+                # Safely extract affiliation from raw author data (list of dicts, not a single dict)
+                affiliation = ""
+                try:
+                    authors_raw = paper.raw.get("author", [])
+                    if isinstance(authors_raw, list) and authors_raw:
+                        first_author = authors_raw[0]
+                        if isinstance(first_author, dict):
+                            aff_list = first_author.get("affiliation", [])
+                            if isinstance(aff_list, list) and aff_list:
+                                aff_entry = aff_list[0]
+                                if isinstance(aff_entry, dict):
+                                    affiliation = aff_entry.get("name", "")
+                                elif isinstance(aff_entry, str):
+                                    affiliation = aff_entry
+                except Exception:
+                    affiliation = ""
+                kg_raw.add_node(f"Author_{author_name}", type="researcher", affiliation=affiliation)
+                kg_raw.add_edge("Environment-Human_Association", f"Author_{author_name}",
+                                relation="contributed_to", year=paper.year)
+            if paper.venue and paper.venue != "arXiv preprint":
+                kg_raw.add_node(paper.venue, type="journal")
+                kg_raw.add_edge(paper.venue, "Environment-Human_Association",
+                                relation="published_in")
+
+    except Exception as e:
+        logger.warning(f"[LiteratureReview] Knowledge graph build failed: {e}, using minimal graph")
+        kg_raw = nx.DiGraph()
         kg_raw.add_node("Environment-Human_Association", type="topic")
-
-    # Add entity keywords from facts
-    ENTITY_KEYWORDS = {
-        "variable": ["temperature", "湿度", "CO₂", "pm2.5", "voc", "臭氧", "humidity",
-                      "noise", "光照", "air_quality", "气压"],
-        "biomarker": ["hrv", "sdnn", "rmssd", "心率变异性", "血氧", "spo2", "ppg",
-                       "血压", "皮质醇", "heart_rate", "cortisol"],
-        "population": ["老年人", "儿童", "办公室工人", "孕妇", "elderly", "children",
-                        "office_worker"],
-        "method": ["ccm", "格兰杰", "granger", "pc-fci", "psm", "贝叶斯网络",
-                    "因果推断", "bayesian"],
-    }
-
-    for fact in validated_facts:
-        fact_text = fact.get("fact", "")
-        for entity_type, keywords in ENTITY_KEYWORDS.items():
-            matched = [kw for kw in keywords if kw.lower() in fact_text.lower()]
-            if matched:
-                kg_raw.add_node(matched[0], type=entity_type)
-                kg_raw.add_edge("Environment-Human_Association", matched[0],
-                                relation="classified_as", entity_type=entity_type)
-
-    # Also add nodes from search results (author names, journals, topics)
-    for paper in papers[:5]:
-        if paper.authors:
-            author_name = paper.authors[0].split(",")[-1].strip().split()[0]
-            kg_raw.add_node(f"Author_{author_name}", type="researcher", affiliation=paper.raw.get("author", {}).get("affiliation", ""))
-            kg_raw.add_edge("Environment-Human_Association", f"Author_{author_name}",
-                            relation="contributed_to", year=paper.year)
-        if paper.venue and paper.venue != "arXiv preprint":
-            kg_raw.add_node(paper.venue, type="journal")
-            kg_raw.add_edge(paper.venue, "Environment-Human_Association",
-                            relation="published_in")
 
     return {
         "literature_summary": summary_content,
