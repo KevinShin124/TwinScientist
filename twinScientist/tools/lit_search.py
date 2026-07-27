@@ -164,22 +164,17 @@ class CrossRefSearcher:
         params = {
             "query": ascii_query,
             "rows": min(max_results, 20),
-            "select": "title,author,published-print,published-online,"
-                      "container-title,DOI,is-referenced-by-count,"
-                      "license,URL,reference-count,category,"
-                      "short-title,subtitle",
-            "message-level": "all",
-            "mailto": "twinScientist@research",  # Crossref 要求提供联系邮箱
+            "mailto": "twinScientist@research",
         }
 
         try:
             import httpx
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)) as client:
                 resp = await client.get(
                     f"{self._client_base}/works",
                     params=params,
-                    headers={"Accept": "application/json"},
+                    headers={"Accept": "application/json", "User-Agent": "TwinScientist/1.0 (mailto:twinScientist@research)"},
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -277,14 +272,17 @@ class ArXivSearcher:
         try:
             import httpx
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(url, headers={"Accept": "application/atom+xml"})
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)) as client:
+                resp = await client.get(url, headers={"Accept": "application/atom+xml", "User-Agent": "TwinScientist/1.0"})
                 resp.raise_for_status()
 
                 return self._parse_atom(resp.text)
 
+        except httpx.TimeoutException:
+            logger.warning(f"[arXiv] Timeout for '{query[:80]}' — skipping")
+            return []
         except Exception as e:
-            logger.warning(f"[arXiv] Search failed for '{query}': {e}")
+            logger.warning(f"[arXiv] Search failed for '{query[:80]}': {type(e).__name__}: {e}")
             return []
 
     def _parse_atom(self, xml_content: str) -> list[Paper]:
@@ -390,42 +388,41 @@ class SemanticScholarSearcher:
 
     async def search(self, query: str, max_results: int = 20) -> list[Paper]:
         """
-        搜索 Semantic Scholar。
-
-        如果未配置 API Key，直接返回空列表。
+        搜索 Semantic Scholar。免费 tier 无需 API key（rate-limited to 1 req/s）。
         """
-        if not self.api_key:
-            logger.debug("[SemScholar] API key not configured, skipping")
-            return []
-
         params = {
             "query": query,
-            "limit": min(max_results, 50),
-            "fields": "title,abstract,authors,year,externalIds,citationCount,"
-                      "venue,isOpenAccess,tldr,outliers,knowledgeGraph",
-            "openAccessPdf": True,
-            "force_default": False,
+            "limit": min(max_results, 20),
+            "fields": "title,abstract,authors,year,externalIds,citationCount,venue,isOpenAccess",
         }
 
-        headers = {"x-api-key": self.api_key}
+        headers = {"Accept": "application/json", "User-Agent": "TwinScientist/1.0"}
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
 
         try:
             import httpx
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)) as client:
                 resp = await client.get(
                     self.BASE_URL,
                     params=params,
                     headers=headers,
                 )
+                if resp.status_code == 429:
+                    logger.warning(f"[SemScholar] Rate limited — skipping")
+                    return []
                 resp.raise_for_status()
                 data = resp.json()
 
                 papers_data = data.get("data", [])
                 return [self._parse_paper(p) for p in papers_data if p.get("title")]
 
+        except httpx.TimeoutException:
+            logger.warning(f"[SemScholar] Timeout for '{query[:80]}' — skipping")
+            return []
         except Exception as e:
-            logger.warning(f"[SemScholar] Search failed for '{query}': {e}")
+            logger.warning(f"[SemScholar] Search failed for '{query[:80]}': {type(e).__name__}: {e}")
             return []
 
     def _parse_paper(self, data: dict) -> Paper:
