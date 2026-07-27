@@ -1,0 +1,5 @@
+start_date,end_date,type,description
+2026-05-10,2026-07-27,air_purifier,"HEPA air purifier running in bedroom, 8h/night"
+2026-06-01,2026-07-27,supplement,"Omega-3 supplement, 1000mg daily"
+2026-05-20,2026-05-27,travel,Business trip to Beijing (higher pollution exposure)
+2026-06-15,2026-06-22,vacation,"Vacation in rural area (clean air, low stress)"

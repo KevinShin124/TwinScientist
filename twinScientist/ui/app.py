@@ -129,6 +129,7 @@ class TwinScientistUI:
         max_iterations: int,
         auto_approve: bool,
         api_key: str = "",
+        language: str = "zh",
         **kwargs,
     ):
         """Launch research pipeline with streaming output and live preview."""
@@ -138,9 +139,6 @@ class TwinScientistUI:
         if not research_question or not research_question.strip():
             yield "[LOG] ⚠️ Please enter a research question.\n", "", ""
             return
-
-        # Extract language from kwargs (Gradio passes it as 6th input)
-        language = kwargs.get("language", "zh")
 
         # Apply API key from UI if provided
         if api_key and api_key.strip():

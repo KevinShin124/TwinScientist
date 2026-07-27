@@ -1,0 +1,8 @@
+date,event_type,severity,notes
+2026-05-06,medication,n/a,Took vitamin D supplement
+2026-05-30,insomnia,mild,"Trouble falling asleep, ~30 min delay"
+2026-06-05,fatigue,moderate,"Significant fatigue, low energy all day"
+2026-06-17,headache,moderate,"Moderate headache in afternoon, took ibuprofen"
+2026-06-26,allergy,moderate,"Moderate allergy symptoms, used antihistamine"
+2026-07-12,headache,mild,"Woke up with mild headache, resolved by noon"
+2026-07-19,medication,n/a,Took vitamin D supplement
