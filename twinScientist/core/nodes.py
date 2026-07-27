@@ -1135,6 +1135,77 @@ async def node_experiment_design(state: AgentState) -> dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════
+# CSV Format Auto-Detection
+# ═══════════════════════════════════════════════════════════════
+
+def _detect_csv_format(csv_path: str) -> str:
+    """
+    Auto-detect CSV format: 'daltons' (long-format with pollutant_name/value)
+    or 'flat' (wide-format with each column as a variable).
+
+    Returns 'daltons', 'flat', or 'unknown'.
+    """
+    import pandas as pd
+    try:
+        df = pd.read_csv(csv_path, nrows=5)
+        cols = [c.lower().strip() for c in df.columns]
+
+        daltons_markers = {'pollutant_name', 'pollutant', 'value', 'unit', 'parameter'}
+        if len(daltons_markers & set(cols)) >= 2:
+            return 'daltons'
+
+        numeric_cols = df.select_dtypes(include=['number']).columns
+        if len(numeric_cols) >= 2:
+            return 'flat'
+
+        return 'unknown'
+    except Exception as e:
+        logger.warning(f"[DataAnalysis] CSV format detection failed for {csv_path}: {e}")
+        return 'unknown'
+
+
+FLAT_COLUMN_MAP = {
+    'temperature_c': 'T', 'temperature': 'T', 'temp': 'T', 'temp_c': 'T', 't': 'T',
+    'humidity_pct': 'H', 'humidity': 'H', 'rh': 'H', 'relative_humidity': 'H', 'h': 'H',
+    'co2_ppm': 'CO2', 'co2': 'CO2', 'carbon_dioxide': 'CO2',
+    'pm25_ugm3': 'PM2.5', 'pm2_5': 'PM2.5', 'pm25': 'PM2.5', 'pm2.5': 'PM2.5', 'pms2_5': 'PM2.5',
+    'pm10_ugm3': 'PM10', 'pm10': 'PM10',
+    'o3_ugm3': 'O3', 'o3': 'O3', 'ozone': 'O3',
+    'no2_ugm3': 'NO2', 'no2': 'NO2', 'nitrogen_dioxide': 'NO2',
+    'voc': 'VOC', 'tvoc': 'VOC', 'vocs': 'VOC',
+    'hrv_sdnn_ms': 'HRV_SDNN', 'sdnn': 'HRV_SDNN', 'hrv_sdnn': 'HRV_SDNN',
+    'hrv_rmssd_ms': 'HRV_RMSSD', 'rmssd': 'HRV_RMSSD', 'hrv_rmssd': 'HRV_RMSSD',
+    'resting_hr_bpm': 'HR', 'heart_rate': 'HR', 'hr_bpm': 'HR', 'hr': 'HR', 'resting_heart_rate': 'HR',
+    'sleep_quality': 'Sleep', 'sleep_score': 'Sleep', 'sleep': 'Sleep',
+    'stress_level': 'Stress', 'stress': 'Stress',
+    'bp_systolic_mmhg': 'BP_SYS', 'systolic': 'BP_SYS', 'bp_systolic': 'BP_SYS',
+    'bp_diastolic_mmhg': 'BP_DIA', 'diastolic': 'BP_DIA', 'bp_diastolic': 'BP_DIA',
+    'steps': 'Steps', 'step_count': 'Steps',
+    'weight_kg': 'Weight', 'weight': 'Weight',
+    'wind_speed_ms': 'Wind', 'wind_speed': 'Wind', 'wind': 'Wind',
+    'pressure_hpa': 'Pressure', 'pressure': 'Pressure', 'air_pressure': 'Pressure',
+    'date': 'date', 'datetime': 'date', 'timestamp': 'date', 'time': 'date',
+}
+
+
+def _parse_flat_csv(csv_path: str) -> dict[str, list[float]]:
+    """Parse a flat-format CSV into {canonical_name: [values]}."""
+    import pandas as pd
+    df = pd.read_csv(csv_path)
+    result = {}
+    for col in df.columns:
+        col_lower = col.lower().strip()
+        canonical = FLAT_COLUMN_MAP.get(col_lower, None)
+        if canonical is None or canonical == 'date':
+            continue
+        vals = pd.to_numeric(df[col], errors='coerce').dropna().tolist()
+        if vals:
+            result[canonical] = vals
+    logger.info(f"[DataAnalysis] Flat CSV parsed: {len(result)} variables from {list(result.keys())}")
+    return result
+
+
 # ============================================================
 # Items 18, 19, 20: Data Analysis + Causal Inference
 # ============================================================
@@ -1166,63 +1237,90 @@ async def node_data_analysis(state: AgentState) -> dict:
 
         if has_real_data:
             try:
-                # Load real Daltons sensor data from channels
                 from pathlib import Path
                 import pandas as pd
 
                 csv_file = Path(input_path)
-                logger.info(f"[DataAnalysis] Loading sensor data from {csv_file}")
+                logger.info(f"[DataAnalysis] Loading data from {csv_file}")
 
-                # Try Daltons-format parser first (for parsed records with pollutant_name/value)
-                from channels.time_series import _detect_daltons_format, _parse_daltons_records
-                df_raw = pd.read_csv(csv_file)
-                raw_records = df_raw.to_dict(orient="records")
-                fmt = _detect_daltons_format(raw_records)
-                parsed_records = _parse_daltons_records(raw_records, single_sensor_file=(fmt == "processed"))
+                # --- Auto-detect CSV format ---
+                fmt = _detect_csv_format(str(csv_file))
+                logger.info(f"[DataAnalysis] Detected format: {fmt}")
 
-                logger.info(f"[DataAnalysis] Loaded {len(parsed_records)} Daltons records (format={fmt})")
+                # --- Flat CSV: parse columns directly as variables ---
+                if fmt == 'flat':
+                    ts_data = _parse_flat_csv(str(csv_file))
+                    n_samples = min(len(v) for v in ts_data.values()) if ts_data else 0
 
-                # Extract time series for each pollutant
-                pollutants = list(set(r.get("pollutant_name", "") for r in parsed_records))
-                ts_data = {p: [] for p in pollutants}
+                    if n_samples < 5:
+                        raise ValueError(f"Not enough data points in flat CSV (n={n_samples})")
 
-                for rec in parsed_records:
-                    poll = rec.get("pollutant_name", "")
-                    val = rec.get("value", 0)
-                    if poll and val != 0:
-                        ts_data[poll].append(float(val))
+                    # Pick causal pairs: all numeric pairs in the data
+                    var_names = sorted(ts_data.keys())
+                    pair_options = []
+                    for i, x_name in enumerate(var_names):
+                        for y_name in var_names[i+1:]:
+                            pair_options.append((x_name, y_name, f"{x_name} -> {y_name}"))
 
-                # Use primary environmental variables for causal inference
-                # Rotate causal pairs across experiments to avoid data monotony
-                exp_count = len([e for e in experiments if e.get("results", {}).get("analysis_complete")])
-                pair_options = []
-                if "T" in ts_data and "CO2" in ts_data:
-                    pair_options.append(("T", "CO2", "Temperature → CO2"))
-                if "T" in ts_data and "VOC" in ts_data:
-                    pair_options.append(("T", "VOC", "Temperature → VOC"))
-                if "CO2" in ts_data and "VOC" in ts_data:
-                    pair_options.append(("CO2", "VOC", "CO2 → VOC"))
-                if "H" in ts_data and "T" in ts_data:
-                    pair_options.append(("H", "T", "Humidity → Temperature"))
-                if len(pair_options) >= 2:
+                    if not pair_options:
+                        raise ValueError("No causal pairs found in flat CSV")
+
+                    # Rotate across experiments
+                    exp_count = len([e for e in experiments if e.get("results", {}).get("analysis_complete")])
                     pair_idx = exp_count % len(pair_options)
                     x_key, y_key, pair_label = pair_options[pair_idx]
-                    logger.info(f"[DataAnalysis] Rotated causal pair: {pair_label} (experiment #{exp_count})")
-                else:
-                    x_key = "T" if "T" in ts_data and ts_data["T"] else pollutants[0]
-                    y_key = "CO2" if "CO2" in ts_data and ts_data["CO2"] else (pollutants[1] if len(pollutants) > 1 else x_key)
+                    x = ts_data[x_key][:500]
+                    y = ts_data[y_key][:500]
+                    n_samples = min(len(x), len(y))
+                    x = x[:n_samples]
+                    y = y[:n_samples]
+                    logger.info(f"[DataAnalysis] Flat CSV: {pair_label} with {n_samples} samples")
 
-                x = [v for v in ts_data[x_key] if v is not None][:500]  # cap at 500 samples
-                y = [v for v in ts_data[y_key] if v is not None][:500]
+                # --- Daltons format: use existing parser ---
+                elif fmt == 'daltons':
+                    from channels.time_series import _detect_daltons_format, _parse_daltons_records
+                    df_raw = pd.read_csv(csv_file)
+                    raw_records = df_raw.to_dict(orient="records")
+                    dfmt = _detect_daltons_format(raw_records)
+                    parsed_records = _parse_daltons_records(raw_records, single_sensor_file=(dfmt == "processed"))
 
-                n_samples = min(len(x), len(y))
-                if n_samples < 10:
-                    raise ValueError(f"Not enough Daltons-parsed data points for analysis (n={n_samples}). Switching to direct CSV parsing.")
+                    logger.info(f"[DataAnalysis] Loaded {len(parsed_records)} Daltons records (format={dfmt})")
 
-                x = x[:n_samples]
-                y = y[:n_samples]
+                    # Extract time series for each pollutant
+                    pollutants = list(set(r.get("pollutant_name", "") for r in parsed_records))
+                    ts_data = {p: [] for p in pollutants}
 
-                logger.info(f"[DataAnalysis] Using {x_key}→{y_key} causal pathway with {n_samples} paired observations (Daltons format)")
+                    for rec in parsed_records:
+                        poll = rec.get("pollutant_name", "")
+                        val = rec.get("value", 0)
+                        if poll and val != 0:
+                            ts_data[poll].append(float(val))
+
+                    exp_count = len([e for e in experiments if e.get("results", {}).get("analysis_complete")])
+                    pair_options = []
+                    if "T" in ts_data and "CO2" in ts_data:
+                        pair_options.append(("T", "CO2", "Temperature -> CO2"))
+                    if "T" in ts_data and "VOC" in ts_data:
+                        pair_options.append(("T", "VOC", "Temperature -> VOC"))
+                    if "CO2" in ts_data and "VOC" in ts_data:
+                        pair_options.append(("CO2", "VOC", "CO2 -> VOC"))
+                    if "H" in ts_data and "T" in ts_data:
+                        pair_options.append(("H", "T", "Humidity -> Temperature"))
+                    if pair_options:
+                        pair_idx = exp_count % len(pair_options)
+                        x_key, y_key, pair_label = pair_options[pair_idx]
+                    else:
+                        x_key = pollutants[0] if pollutants else "T"
+                        y_key = pollutants[1] if len(pollutants) > 1 else x_key
+                    x = [v for v in ts_data.get(x_key, []) if v is not None][:500]
+                    y = [v for v in ts_data.get(y_key, []) if v is not None][:500]
+
+                    n_samples = min(len(x), len(y))
+                    if n_samples < 10:
+                        raise ValueError(f"Not enough Daltons data (n={n_samples})")
+                    x, y = x[:n_samples], y[:n_samples]
+
+                    logger.info(f"[DataAnalysis] Daltons: {x_key}->{y_key} ({n_samples} samples)")
 
             except Exception as _daltons_exc:
                 # Fallback: read CSV directly — columns are named T, CO2, VOC, NO2, PMS1, PMS10, PMS2_5, C2H5OH, H
