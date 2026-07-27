@@ -169,7 +169,9 @@ Your input matters at every stage — you are not just a passive observer but an
                 reply_text = "I'm sorry, I couldn't generate a response right now. Please try again."
                 detected_intent = "unknown"
             else:
-                reply_text = choices[0].get("message", {}).get("content", reply_text)
+                reply_text = choices[0].get("message", {}).get("content", "")
+                if not reply_text:
+                    reply_text = "I'm sorry, I couldn't generate a response right now. Please try again."
                 detected_intent = self._detect_intent(user_message)
 
         except Exception as e:
