@@ -139,6 +139,9 @@ class TwinScientistUI:
             yield "[LOG] ⚠️ Please enter a research question.\n", "", ""
             return
 
+        # Extract language from kwargs (Gradio passes it as 6th input)
+        language = kwargs.get("language", "zh")
+
         # Apply API key from UI if provided
         if api_key and api_key.strip():
             os.environ["BAILIAN_API_KEY"] = api_key.strip()

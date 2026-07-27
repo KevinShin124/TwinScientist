@@ -314,8 +314,9 @@ def interactive_mode():
 
 def ui_mode():
     """启动 Gradio Web UI"""
+    from core.graph import cognitive_graph
     from ui.app import create_demo
-    demo = create_demo()
+    demo = create_demo(agent_app=cognitive_graph)
     demo.launch(server_name="127.0.0.1", server_port=7860)
     print("Web UI 已启动: http://127.0.0.1:7860")
 
