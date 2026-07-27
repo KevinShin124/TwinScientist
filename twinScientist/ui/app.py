@@ -275,13 +275,15 @@ class TwinScientistUI:
         except Exception as e:
             return f"❌ Save failed: {str(e)[:200]}"
 
-    def chat_reply(self, message: str):
+    async def chat_reply(self, message: str, history: list):
         """Process user chat message and generate agent response."""
         if not message or not message.strip():
-            return "", ""
+            return history, ""
 
         if not HAS_CHAT_AGENT or not self.agent_app:
-            return "Chat not available.", ""
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": "Chat not available. Please start research first."})
+            return history, ""
 
         try:
             from core.llm_client import QwenClient
@@ -297,7 +299,7 @@ class TwinScientistUI:
             state = self.last_state_update or {}
             action = state.get("current_action", "")
 
-            result = chat_agent.reply(
+            result = await chat_agent.reply(
                 llm_client=llm_client,
                 user_message=message,
                 state=state,
@@ -307,10 +309,15 @@ class TwinScientistUI:
             reply = result.get("reply", "Sorry, I couldn't generate a response.")
             sentiment = result.get("sentiment", "unknown")
 
-            return f"**[{sentiment.upper()}]**\n\n{reply}", ""
+            # Append to Gradio chatbot history
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": f"**[{sentiment.upper()}]**\n\n{reply}"})
+            return history, ""
 
         except Exception as e:
-            return f"Error: {str(e)[:200]}", ""
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": f"Error: {str(e)[:200]}"})
+            return history, ""
 
     def submit_decision(
         self,
@@ -548,7 +555,7 @@ class TwinScientistUI:
 
             chat_send.click(
                 fn=self.chat_reply,
-                inputs=[chat_input],
+                inputs=[chat_input, chat_interface],
                 outputs=[chat_interface, chat_input],
             )
 
