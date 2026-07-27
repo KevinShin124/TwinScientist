@@ -450,6 +450,7 @@ class TwinScientistUI:
                         info="Language for generated research reports and annotations",
                     )
                     start_btn = gr.Button("🚀 Start Research", variant="primary")
+                    demo_btn = gr.Button("⚡ One-Click Demo", variant="secondary", size="sm")
 
                 # Right column: Output and monitoring
                 with gr.Column(scale=2):
@@ -551,6 +552,16 @@ class TwinScientistUI:
                 fn=self.save_report,
                 inputs=[report_state, save_path],
                 outputs=[save_status],
+            )
+
+            demo_btn.click(
+                fn=lambda: ("Environment-Human Health", "How does PM2.5 exposure affect heart rate variability (HRV) and sleep quality?", 5, True, os.getenv("BAILIAN_API_KEY", ""), "zh"),
+                inputs=[],
+                outputs=[domain_input, question_input, max_iter_slider, auto_approve_cb, api_key_input, lang_selector],
+            ).then(
+                fn=self.run_research,
+                inputs=[domain_input, question_input, max_iter_slider, auto_approve_cb, api_key_input, lang_selector],
+                outputs=[output_stream, report_preview, progress_md, hypothesis_timeline, debate_table, report_state],
             )
 
             chat_send.click(
