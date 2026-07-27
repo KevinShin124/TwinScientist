@@ -2207,7 +2207,10 @@ async def node_report_writing(state: AgentState) -> dict:
         parts.append(f"基于文献调研发现，当前 **{domain}** 领域存在以下关键局限：")
         parts.append("")
         for i, fact in enumerate(fact_list[:5], 1):
-            parts.append(f"{i}. {fact[:200]}")
+            # Clean up fact text: remove "| Reference: ..." suffix
+            clean_fact = fact.split("| Reference:")[0].split("| Reference :")[0].strip().rstrip("]")
+            if clean_fact:
+                parts.append(f"{i}. {clean_fact[:200]}")
     else:
         parts.append(f"基于对 **{domain}** 领域的系统分析，当前研究存在以下局限性：")
         parts.append("")
@@ -2611,26 +2614,6 @@ async def node_report_writing(state: AgentState) -> dict:
     parts.append(f"*{get_text('agent_info', lang)}*")
 
     report = NL.join(parts)
-
-    # --- Iteration status check (inserted before report output) ---
-    iter_status_lines = []
-    if iteration_val >= 1:
-        iter_status_lines.append(get_text("iteration_status_ok", lang, n=iteration_val))
-    else:
-        iter_status_lines.append(get_text("iteration_status_warn", lang, n=iteration_val))
-
-    insert_idx = 1  # right after report title
-    for line in reversed(iter_status_lines):
-        parts.insert(insert_idx, line)
-    parts.insert(insert_idx, "")
-    parts.insert(insert_idx, "---")
-    parts.insert(insert_idx, "")
-    report = NL.join(parts)
-
-    # Also inject into the metadata footer area
-    footer_marker = f"*迭代轮次: {iteration_val}/{max_iter} | 收敛度: {convergence_val:.0f}%*"
-    status_footer = f"| 迭代状态: {'✅ 已执行{iteration_val}轮' if iteration_val >= 1 else '⚠️ 未执行'}*"
-    report = report.replace(footer_marker, f"*迭代轮次: {iteration_val}/{max_iter} 收敛度: {convergence_val:.0f}%{status_footer}")
 
     logger.info("[ReportWriting] Report generated successfully with real data")
     logger.info(f"[ReportWriting] Final report length={len(report)}, Section 9 present={('以下基于真实数据分析' in report) or ('理论可行性验证框架' in report)}")

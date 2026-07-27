@@ -33,5 +33,40 @@
       "HRV",
       "下降"
     ]
+  },
+  {
+    "id": "2379249ed1eb",
+    "session_id": "cli-session-4f9b87f7",
+    "query": "",
+    "domain": "",
+    "timestamp": "2026-07-27T07:49:26.898331+00:00",
+    "iterations": 1,
+    "convergence": 1.0,
+    "best_hypothesis": {
+      "title": "PM₂.₅暴露→氧化应激→心率下降+SpO₂降低",
+      "statement": "在100%条件下满足的环境中，细颗粒物通过呼吸道进入循环系统，触发氧化应激反应和全身性炎症，导致毛细血管收缩、血氧运输效率降低，具体影响目标指标:SpO2, heart_rate, PPG_amplitude",
+      "confidence": 0.75
+    },
+    "evidence_summary": [
+      {
+        "method": "granger",
+        "strength": 0.964,
+        "direction": null,
+        "summary": "[granger] 5 significant lags out of 5"
+      }
+    ],
+    "report_excerpt": "# 科学假设与研究计划\n\n---\n\n已执行迭代: 1 轮\n\n> **Domain**: 环境—人体关联 &nbsp;|&nbsp; **Iterations**: 1/200 &nbsp;|&nbsp; **Convergence**: 100%\n\n---\n\n## 一、待研究问题（Problem Statement）\n\n> **研究问题**\n> How does PM2.5 affect HRV?\n\n### 当前领域局限性\n\n基于文献调研发现，当前 **环境—人体关联** 领域存在以下关键局限：\n\n1. PM2.5暴露与心率变异性（HRV）的降低显著相关] | Reference: [需要验证]\n2. 长期暴露于高浓度PM2.5环境中会导致心脏自主神经功能受损，表现为HRV参数下降] | Reference: [需要验证]\n3. 短期急性暴露于PM2.5后，健康成人的心率变异性会出现暂时性降低] | Reference: [需要验证]\n4. 儿童和老年人对PM2.5污染更为敏感，其HRV变化比一般成年人群更明显] | Reference: [需要验证]\n5. PM2.5通过诱导炎症反应和氧化应激机制影响心脏自主神经系统] | Reference: [需要验证]\n\n### 本研究切入点\n\n本研究通过 **AI Scientist 自主科研系统**，融合多源环境传感器数据与生理指标，\n采用因果推断方法（而非单纯相关性分析），系统性地解决上述局限性。\n\n---\n\n## 二、解决思路（Rationale）\n\n本研究旨在探讨细颗粒物（PM2.5）对心率变异性（HRV）的影响，特别是温度水平与HRV非线性复杂度指标之间的非线性关联。已有研究表明，PM2.5暴露与HRV的降低显著相关，且长期暴露于高浓度PM2.5环境中会导致心脏自主神经功能受损，表现为HRV参数下降 (需要验证)。然而，关于温度在这一过程中的具体作用机制尚未被系统探索。通过控制其他环境因子恒定，单独考察温度梯度变化对HRV非线性复杂度指标的影响，可以填补这一知识空白。\n\n创新点在于采用跨学科的方法，结合环境科学和生理学的研究成果。首先，利用Granger因果分析方法来确定PM2.5与HRV之间的因果关系，并量化其强度。其次，通过设计实验来探究不同温度条件下PM2.5对HRV的具体影响，从而揭示温度在这一过程中的调",
+    "keywords": [
+      "暴露",
+      "heart",
+      "道进入循",
+      "SpO",
+      "rate",
+      "足的环境",
+      "条件下满",
+      "降低",
+      "心率下降",
+      "细颗粒物"
+    ]
   }
 ]
