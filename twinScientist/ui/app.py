@@ -144,7 +144,7 @@ class TwinScientistUI:
 
         # === Pre-flight checks ===
         if not research_question or not research_question.strip():
-            yield "[LOG] ⚠️ Please enter a research question.\n", "", ""
+            yield "[LOG] ⚠️ Please enter a research question.\n", "", "", "", "", ""
             return
 
         # Apply API key from UI if provided
@@ -167,6 +167,9 @@ class TwinScientistUI:
                 "Get your key at: https://dashscope.aliyun.com/\n",
                 "",
                 "",
+                "",
+                "",
+                "",
             )
             return
 
@@ -181,7 +184,7 @@ class TwinScientistUI:
                 "knowledge as a fallback.\n"
             )
 
-        yield f"[LOG] 🔬 Starting research pipeline...\n[LOG] Data: {len(sensor_files)} sensor files, {len(bio_files)} biometric files{data_status}\n\n", "", ""
+        yield f"[LOG] 🔬 Starting research pipeline...\n[LOG] Data: {len(sensor_files)} sensor files, {len(bio_files)} biometric files{data_status}\n\n", "", "", "", "", ""
 
         initial_state = {
             "query": research_question,
@@ -193,6 +196,8 @@ class TwinScientistUI:
         }
 
         report_content = ""
+        hypothesis_tree = []
+        debate_records = []
         if self.agent_app:
             try:
                 thread_id = f"ui-session-{uuid.uuid4().hex[:8]}"
@@ -209,20 +214,30 @@ class TwinScientistUI:
                         if "final_report" in node_data:
                             report_content = node_data["final_report"]
 
+                        # Collect hypothesis tree and debate records for tabs
+                        if "hypothesis_tree" in node_data:
+                            hypothesis_tree = node_data["hypothesis_tree"]
+                        if "debate_records" in node_data:
+                            debate_records = node_data["debate_records"]
+
+                        # Format live updates for tabs
+                        hypo_md = self.get_hypothesis_timeline(hypothesis_tree)
+                        debate_md = self.get_debate_display(debate_records)
+
                         # Stream structured events for UI consumption
                         log_line = f"[EVENT]{json.dumps({'node': node_name, 'state': node_data}, ensure_ascii=False)}\n"
-                        yield log_line, "", ""
+                        yield log_line, "", "", hypo_md, debate_md, report_content
                     else:
-                        yield f"{event}\n", "", ""
+                        yield f"{event}\n", "", "", "", "", report_content
 
                 # Research complete — yield final report preview
                 if report_content:
                     preview = report_content[:3000]
                     if len(report_content) > 3000:
-                        preview += f"\n\n---\n\n*... ({len(report_content)} chars total. Full report saved to disk.)*"
-                    yield "", preview, ""
+                        preview += f"\n\n---\n\n*... ({len(report_content)} chars total. Use 💾 Save Report to save.)*"
+                    yield "", preview, "", self.get_hypothesis_timeline(hypothesis_tree), self.get_debate_display(debate_records), report_content
                 else:
-                    yield "", "## ⚠️ No report generated. Check logs for errors.", ""
+                    yield "", "## ⚠️ No report generated. Check logs for errors.", "", "", "", ""
 
             except Exception as e:
                 error_msg = (
@@ -232,7 +247,7 @@ class TwinScientistUI:
                     f"- Check your internet connection\n"
                     f"- Try reducing max iterations\n"
                 )
-                yield error_msg, "", ""
+                yield error_msg, "", "", "", "", ""
         else:
             yield (
                 "[LOG] ⚠️ Agent not configured.\n\n"
@@ -240,7 +255,25 @@ class TwinScientistUI:
                 "```bash\npython -m main --ui\n```\n",
                 "",
                 "",
+                "",
+                "",
+                "",
             )
+
+    def save_report(self, report_content: str, save_path: str) -> str:
+        """Save the full report to the specified path."""
+        if not report_content or not report_content.strip():
+            return "⚠️ No report to save. Run research first."
+        if not save_path or not save_path.strip():
+            save_path = "output/scientific_hypothesis_report.md"
+        try:
+            from pathlib import Path
+            path = Path(save_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(report_content, encoding="utf-8")
+            return f"✅ Report saved to `{path}` ({len(report_content)} chars)"
+        except Exception as e:
+            return f"❌ Save failed: {str(e)[:200]}"
 
     def chat_reply(self, message: str):
         """Process user chat message and generate agent response."""
@@ -423,6 +456,15 @@ class TwinScientistUI:
                         "## 📄 Research Report Preview\n\n"
                         "The generated Scientific Hypothesis & Research Plan will appear here."
                     )
+                    report_state = gr.State("")
+                    with gr.Row():
+                        save_path = gr.Textbox(
+                            label="Save Path",
+                            value="output/scientific_hypothesis_report.md",
+                            scale=3,
+                        )
+                        save_btn = gr.Button("💾 Save Report", variant="secondary", scale=1)
+                    save_status = gr.Markdown("")
 
             # ========================================================
             # Tabs for different views
@@ -495,7 +537,13 @@ class TwinScientistUI:
             start_btn.click(
                 fn=self.run_research,
                 inputs=[domain_input, question_input, max_iter_slider, auto_approve_cb, api_key_input, lang_selector],
-                outputs=[output_stream, report_preview, progress_md],
+                outputs=[output_stream, report_preview, progress_md, hypothesis_timeline, debate_table, report_state],
+            )
+
+            save_btn.click(
+                fn=self.save_report,
+                inputs=[report_state, save_path],
+                outputs=[save_status],
             )
 
             chat_send.click(
