@@ -910,132 +910,166 @@ async def node_hypothesis_generation(state: AgentState) -> dict:
 @carry_control_fields
 async def node_tournament_eval(state: AgentState) -> dict:
     """
-    【假设淘汰赛】从 N 个候选假设中两两比较，最终选出 1 个最优假设。
+    【假设淘汰赛 — Elo-based Pairwise Tournament】
 
-    FIX: 在每条退出路径上都必须显式传递 _max_iterations_, iteration,
-         consecutive_failures，防止 LangGraph state merge 吞掉这些控制字段。
+    对标 Google Co-Scientist 的 Tournament 机制：
+    1. 每个假设初始 Elo = 1500
+    2. 两两配对，LLM 作为裁判判断胜负
+    3. Elo 更新 (K=32)
+    4. 按最终 Elo 排名，Top-N 进入下一轮
+
+    与旧版 LLM 一次性淘汰的区别：
+    - 旧版: 把所有假设扔给 LLM，让它选一个 → 不稳定、不可复现
+    - 新版: 逐对比较，每场独立评分，Elo 累积 → 统计严谨、可追溯
     """
-    # Guard keys — always carry these forward regardless of branch
     max_iters = state.get("_max_iterations_", 200)
     curr_iter = state.get("iteration", 0)
     prev_failures = state.get("consecutive_failures", 0)
 
     hypotheses = copy.deepcopy([dict(h) for h in state.get("hypothesis_tree", [])])
     if len(hypotheses) <= 1:
-        # 无需比较，直接标记为 active
         for h in hypotheses:
             if h.get("status") == "proposed":
                 h["status"] = "active"
         return {
             "hypothesis_tree": hypotheses,
-            "_max_iterations_": max_iters,
-            "iteration": curr_iter,
+            "_max_iterations_": max_iters, "iteration": curr_iter,
             "consecutive_failures": prev_failures,
         }
 
     llm = _get_llm()
 
-    # Cap hypotheses to prevent API timeout: sort by confidence, keep top 12
+    # Cap at 12 to prevent timeout
     if len(hypotheses) > 12:
         hypotheses.sort(key=lambda h: h.get("confidence_prior", 0), reverse=True)
         hypotheses = hypotheses[:12]
-        logger.info(f"[TournamentEval] Capped to top 12 hypotheses (from {len(state.get('hypothesis_tree', []))}) to prevent timeout")
+        logger.info(f"[Tournament] Capped to top 12 hypotheses")
 
-    # Build bracket description for the LLM prompt (truncated per hypothesis)
-    hyp_list_text = "\n".join(
-        f"{i + 1}. [{h['id']}] **{h.get('title', '?')}**\n   陈述: {h.get('statement', '')[:150]}\n   推理: {h.get('reasoning_chain', '')[:100]}\n   先验置信度: {h.get('confidence_prior', '?')}"
-        for i, h in enumerate(hypotheses)
-    )
+    # ── Elo Tournament ──────────────────────────────────────────────
+    ELO_INITIAL = 1500
+    ELO_K = 32
+    elo = {h["id"]: ELO_INITIAL for h in hypotheses}
+    elimination_records = []
 
-    num_hyps = len(hypotheses)
-    user_content = TOURNAMENT_EVAL_PROMPT.replace("[N]", str(num_hyps))
-    user_content += f"\n\n## 当前候选假设列表\n{hyp_list_text}"
+    # Build all unique pairs
+    pairs = []
+    for i in range(len(hypotheses)):
+        for j in range(i + 1, len(hypotheses)):
+            pairs.append((i, j))
 
-    messages = [
-        {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
+    # Limit to at most 15 pairwise matches to avoid timeout
+    import random as _random
+    if len(pairs) > 15:
+        pairs = _random.sample(pairs, 15)
+    logger.info(f"[Tournament] Running {len(pairs)} pairwise Elo matches (from {len(hypotheses)} hypotheses)")
 
-    content, _ = await _async_call_llm(llm, messages, temperature=0.3, max_tokens=8192)
+    for match_idx, (i, j) in enumerate(pairs):
+        h_a = hypotheses[i]
+        h_b = hypotheses[j]
 
-    # Parse winner and elimination records from LLM output
-    winner_title_m = re.search(r'\*\*获胜假设\*\*:\s*(.+)', content)
-    winner_id_m = re.search(r'\*\*获胜假设ID\*\*:\s*(.+)', content)
-    winner_title = winner_title_m.group(1).strip() if winner_title_m else ""
-    winner_id = winner_id_m.group(1).strip() if winner_id_m else ""
+        # ── LLM Judge: compare two hypotheses ──
+        judge_prompt = f"""You are a scientific peer reviewer judging two competing hypotheses.
 
-    # If we couldn't parse winner ID, fall back to matching by title
-    if not winner_id and winner_title:
-        for h in hypotheses:
-            if winner_title in h.get("title", "") or h.get("title", "") in winner_title:
-                winner_id = h["id"]
-                break
+## Hypothesis A
+- **Title**: {h_a.get('title', '?')}
+- **Statement**: {h_a.get('statement', '')[:200]}
+- **Reasoning**: {h_a.get('reasoning_chain', '')[:150]}
+- **Confidence (prior)**: {h_a.get('confidence_prior', '?')}
 
-    # Parse elimination table rows: | 标题 | ID | 轮次 | 被谁击败 | 原因 |
-    elim_records = []
-    table_rows = re.findall(r'\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|', content)
-    for row in table_rows:
-        title, hid, round_, defeated_by, reason = [r.strip() for r in row]
-        # Skip header-like entries
-        if "假设标题" in title or "标题" in title and "ID" in hid:
+## Hypothesis B
+- **Title**: {h_b.get('title', '?')}
+- **Statement**: {h_b.get('statement', '')[:200]}
+- **Reasoning**: {h_b.get('reasoning_chain', '')[:150]}
+- **Confidence (prior)**: {h_b.get('confidence_prior', '?')}
+
+Judge which hypothesis is stronger based on: novelty, testability, mechanistic depth, and potential impact.
+Reply with ONLY this format:
+Winner: A or B
+Score_A: 0-10
+Score_B: 0-10
+Reason: <one sentence>"""
+
+        messages = [
+            {"role": "system", "content": "You are a scientific peer reviewer. Be objective and concise."},
+            {"role": "user", "content": judge_prompt},
+        ]
+
+        try:
+            content, _ = await _async_call_llm(llm, messages, temperature=0.2, max_tokens=512)
+        except Exception as e:
+            logger.warning(f"[Tournament] Match {match_idx+1} LLM call failed: {e}")
             continue
-        elim_records.append({
-            "eliminated_title": title,
-            "eliminated_id": hid,
-            "eliminated_round": round_,
-            "defeated_by": defeated_by,
-            "reason": reason,
-        })
 
-    # Apply result: set winner status → active, others that were eliminated → refuted
-    win_count = 0
-    elim_count = 0
-    winner_statement = ""
+        # Parse judge result
+        winner_m = re.search(r'Winner:\s*(A|B)', content, re.IGNORECASE)
+        score_a_m = re.search(r'Score_A:\s*([\d.]+)', content)
+        score_b_m = re.search(r'Score_B:\s*([\d.]+)', content)
+        reason_m = re.search(r'Reason:\s*(.+)', content)
+
+        winner = winner_m.group(1).upper() if winner_m else None
+        score_a = float(score_a_m.group(1)) if score_a_m else 5.0
+        score_b = float(score_b_m.group(1)) if score_b_m else 5.0
+        reason = reason_m.group(1).strip()[:200] if reason_m else "No reason provided"
+
+        # ── Elo Update ──────────────────────────────────────────
+        ra, rb = elo[h_a["id"]], elo[h_b["id"]]
+        ea = 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
+        eb = 1.0 - ea
+
+        if winner == "A":
+            sa, sb = 1.0, 0.0
+        elif winner == "B":
+            sa, sb = 0.0, 1.0
+        else:
+            # Draw: use score ratio
+            total = score_a + score_b
+            sa, sb = (score_a / total, score_b / total) if total > 0 else (0.5, 0.5)
+
+        elo[h_a["id"]] = ra + ELO_K * (sa - ea)
+        elo[h_b["id"]] = rb + ELO_K * (sb - eb)
+
+        # Record elimination for the loser
+        loser_id = h_b["id"] if winner == "A" else (h_a["id"] if winner == "B" else None)
+        if loser_id:
+            elimination_records.append({
+                "eliminated_id": loser_id,
+                "eliminated_title": (h_b if winner == "A" else h_a).get("title", "")[:50],
+                "eliminated_round": f"Match {match_idx+1}",
+                "defeated_by": (h_a if winner == "A" else h_b).get("id", ""),
+                "reason": reason,
+            })
+
+        logger.debug(f"[Tournament] Match {match_idx+1}: {h_a['id'][:8]} ({score_a}) vs {h_b['id'][:8]} ({score_b}) -> Winner: {winner}")
+
+    # ── Rank by Elo and determine winner ──────────────────────────
+    ranked = sorted(hypotheses, key=lambda h: elo.get(h["id"], ELO_INITIAL), reverse=True)
+    winner = ranked[0]
+    winner_id = winner["id"]
+
+    # Update hypothesis statuses
     for h in hypotheses:
-        if h["id"] == winner_id or (winner_title and winner_title in h.get("title", "")):
+        if h["id"] == winner_id:
             h["status"] = "active"
             h["tournament_won"] = True
+            h["elo_score"] = round(elo[h["id"]], 1)
             h["updated_at"] = _now_iso()
-            winner_statement = h.get("statement", "")
-            win_count += 1
-        elif h.get("status") == "proposed" and win_count == 0:
-            # First proposed hyp still marked active as fallback if winner not parsed
-            h["status"] = "active"
-            h["tournament_won"] = True
-            winner_statement = h.get("statement", "")
-            win_count += 1
-
-    # If winner was never matched, just pick the one with highest prior confidence
-    if win_count == 0:
-        best = max(hypotheses, key=lambda h: h.get("confidence_prior", 0))
-        best["status"] = "active"
-        best["tournament_won"] = True
-        winner_id = best["id"]
-        winner_statement = best.get("statement", "")
-        logger.info(f"[TournamentEval] Winner not parsed from output; selected highest-prior: {best['id']} ({best.get('title', '?')})")
-
-    # Mark remaining proposed hypotheses as candidates for next round or review
-    for h in hypotheses:
-        if h["id"] != winner_id and h.get("status") == "proposed":
+        elif h.get("status") == "proposed":
             h["status"] = "refuted_in_tournament"
-            elim_count += 1
+            h["elo_score"] = round(elo[h["id"]], 1)
 
-    # Preserve failure count — only increment on actual failures, don't blindly reset
-    prev_failures = state.get("consecutive_failures", 0)
-
-    logger.info(
-        f"[TournamentEval] Winner={winner_id}, statement_len={len(winner_statement)}, "
-        f"eliminated {elim_count} proposals, recorded {len(elim_records)} elimination records"
-    )
+    logger.info(f"[Tournament] Winner={winner_id}, Elo={elo[winner_id]:.0f}, "
+                f"eliminated {len(elimination_records)} proposals, "
+                f"top3 Elo: {[(h['id'][:8], round(elo[h['id']])) for h in ranked[:3]]}")
 
     return {
         "hypothesis_tree": hypotheses,
-        "elimination_records": elim_records,
-        "prev_round_winner_id": winner_id,
-        "prev_round_winner_statement": winner_statement,
-        "consecutive_failures": prev_failures,   # ← FIX: preserve instead of resetting to 0
+        "elimination_records": state.get("elimination_records", []) + elimination_records,
+        "_max_iterations_": max_iters,
+        "iteration": curr_iter,
+        "consecutive_failures": prev_failures,
         "current_action": "tournament_eval",
     }
+
 
 @carry_control_fields
 async def node_experiment_design(state: AgentState) -> dict:
