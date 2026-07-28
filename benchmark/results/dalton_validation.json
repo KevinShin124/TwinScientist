@@ -1,14 +1,14 @@
 {
   "dataset": "DALTON (Karmakar et al.)",
-  "n_rows": 200,
+  "n_rows": 9000,
   "n_variables": 9,
   "metrics": {
-    "f1": 0.6,
-    "precision": 0.6,
-    "recall": 0.6,
+    "f1": 0.8333,
+    "precision": 0.7143,
+    "recall": 1.0,
     "direction_accuracy": 1.0,
     "fpr": 1.0,
-    "correct": 3,
+    "correct": 5,
     "total": 5
   },
   "per_finding": [
@@ -17,7 +17,7 @@
       "effect": "PMS2_5",
       "expected_sign": "positive",
       "detected": true,
-      "confidence": 1.0,
+      "confidence": 0.7,
       "detail": "因果边已检测"
     },
     {
@@ -25,39 +25,39 @@
       "effect": "PMS10",
       "expected_sign": "positive",
       "detected": true,
-      "confidence": 0.999665,
+      "confidence": 0.7,
       "detail": "因果边已检测"
     },
     {
       "cause": "CO2",
       "effect": "PMS2_5",
       "expected_sign": "positive",
-      "detected": false,
-      "confidence": 0.0,
-      "detail": "未检测到（遗漏）"
+      "detected": true,
+      "confidence": 0.7,
+      "detail": "因果边已检测"
     },
     {
       "cause": "H",
       "effect": "T",
       "expected_sign": "negative",
       "detected": true,
-      "confidence": 0.934994,
+      "confidence": 1.0,
       "detail": "因果边已检测"
     },
     {
       "cause": "C2H5OH",
       "effect": "PMS2_5",
       "expected_sign": "positive",
-      "detected": false,
-      "confidence": 0.0,
-      "detail": "未检测到（遗漏）"
+      "detected": true,
+      "confidence": 0.7,
+      "detail": "因果边已检测"
     },
     {
       "cause": "PMS2_5",
       "effect": "T",
       "expected_sign": "none",
       "detected": true,
-      "confidence": 0.999457,
+      "confidence": 0.7,
       "detail": "假阳性（误报）"
     },
     {
@@ -65,7 +65,7 @@
       "effect": "H",
       "expected_sign": "none",
       "detected": true,
-      "confidence": 0.999927,
+      "confidence": 1.0,
       "detail": "假阳性（误报）"
     }
   ]

@@ -217,6 +217,11 @@ def run_causal_inference(
         y_list = y_arr[:n].tolist()
         corr = float(np.corrcoef(x_arr[:n], y_arr[:n])[0, 1])
 
+        # CCM works best with 500-1000 points; subsample if larger
+        MAX_CCM = 1000
+        x_ccm = x_list if n <= MAX_CCM else x_arr[::n//MAX_CCM][:MAX_CCM].tolist()
+        y_ccm = y_list if n <= MAX_CCM else y_arr[::n//MAX_CCM][:MAX_CCM].tolist()
+
         best_sign = None
         best_conf = 0.0
         detected = False
@@ -224,6 +229,8 @@ def run_causal_inference(
         async def _run_one(method: str):
             from tools.causal_inference import CausalInferenceEngine
             engine = CausalInferenceEngine()
+            if method == "ccm":
+                return await engine.run(method, x=x_ccm, y=y_ccm)
             return await engine.run(method, x=x_list, y=y_list)
 
         for method in methods:
@@ -232,13 +239,18 @@ def run_causal_inference(
                     out = asyncio.run(_run_one("ccm"))
                     if isinstance(out, dict):
                         direction = out.get("causal_direction", "unclear")
-                        # CCM standalone: only accept if clear direction X→Y
+                        rho_xy = out.get("ccm_rho_x_to_y", 0)
+                        rho_yx = out.get("ccm_rho_y_to_x", 0)
+                        rho_diff = abs(rho_xy - rho_yx)
+
+                        # CCM: accept X→Y or bidirectional (but penalize tiny rho_diff)
                         if direction in ("X→Y", "bidirectional"):
-                            rho_xy = out.get("ccm_rho_x_to_y", 0)
-                            rho_yx = out.get("ccm_rho_y_to_x", 0)
                             max_rho = max(rho_xy, rho_yx)
-                            if max_rho > best_conf:
-                                best_conf = max_rho
+                            # Shared dynamics penalty: if rho_diff < 0.01, CCM can't
+                            # distinguish directions — likely spurious correlation
+                            ccm_conf = max_rho * (1.0 if rho_diff > 0.01 else 0.7)
+                            if ccm_conf > best_conf:
+                                best_conf = ccm_conf
                                 best_sign = "positive" if corr >= 0 else "negative"
                                 detected = True
 
@@ -248,8 +260,22 @@ def run_causal_inference(
                         p_val = out.get("min_p_value", 1.0)
                         granger_conf = 1.0 - min(p_val, 0.999)
                         if granger_conf >= GRANGER_MIN_CONF:
-                            if granger_conf > best_conf:
-                                best_conf = granger_conf
+                            # Check CCM for shared dynamics warning
+                            # If CCM saw bidirectional with tiny rho_diff, penalize
+                            ccm_penalty = 1.0
+                            try:
+                                out_c = asyncio.run(_run_one("ccm"))
+                                if isinstance(out_c, dict):
+                                    rho_xy_c = out_c.get("ccm_rho_x_to_y", 0)
+                                    rho_yx_c = out_c.get("ccm_rho_y_to_x", 0)
+                                    if abs(rho_xy_c - rho_yx_c) < 0.01:
+                                        ccm_penalty = 0.7  # mild penalty for shared dynamics
+                            except Exception:
+                                pass
+
+                            adjusted_conf = granger_conf * ccm_penalty
+                            if adjusted_conf > best_conf:
+                                best_conf = adjusted_conf
                                 best_sign = "positive" if corr >= 0 else "negative"
                                 detected = True
 

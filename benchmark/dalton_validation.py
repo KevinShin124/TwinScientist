@@ -36,14 +36,21 @@ from benchmark.metrics import compute_scenario_metrics, ScenarioMetrics
 # ============================================================
 
 def load_dalton_data(data_path: Path = None) -> Dict[str, np.ndarray]:
-    """Load DALTON CSV data from the processed directory."""
+    """Load DALTON CSV data from all available directories."""
     if data_path is None:
-        data_path = PROJECT_ROOT / "data" / "Processed"
+        data_path = PROJECT_ROOT / "data"
 
-    env_files = list(data_path.rglob("*_env.csv"))
+    # Search in multiple directories for maximum data coverage
+    search_dirs = [data_path / "Processed", data_path / "sensors"]
+    env_files = []
+    for sd in search_dirs:
+        if sd.exists():
+            env_files.extend(sd.rglob("*_env.csv"))
+
     if not env_files:
         raise FileNotFoundError(f"No DALTON env CSV files found in {data_path}")
 
+    env_files = list(set(env_files))  # deduplicate
     print(f"  Found {len(env_files)} environment CSV files")
     all_dfs = []
     for f in env_files:

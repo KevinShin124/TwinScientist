@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-07-29 01:05:05",
+  "timestamp": "2026-07-29 01:37:32",
   "method": "all",
   "n_scenarios": 4,
   "aggregate": {
     "n_scenarios": 4,
     "total_ground_truth_edges": 7,
     "total_detected_correctly": 7,
-    "micro_precision": 0.5,
+    "micro_precision": 0.3889,
     "micro_recall": 1.0,
-    "micro_f1": 0.6667,
-    "macro_precision": 0.5,
+    "micro_f1": 0.56,
+    "macro_precision": 0.4583,
     "macro_recall": 1.0,
-    "macro_f1": 0.6667,
+    "macro_f1": 0.625,
     "macro_direction_accuracy": 1.0,
     "macro_sign_accuracy": 0.875,
-    "macro_false_positive_rate": 0.875,
-    "macro_auc": 0.9688,
+    "macro_false_positive_rate": 1.0,
+    "macro_auc": 0.5,
     "per_scenario": [
       {
         "id": "ext_1",
@@ -23,7 +23,7 @@
         "f1": 0.6667,
         "precision": 0.5,
         "recall": 1.0,
-        "auc": 1.0,
+        "auc": 0.5,
         "direction_acc": 1.0,
         "sign_acc": 1.0,
         "fpr": 1.0,
@@ -37,7 +37,7 @@
         "f1": 0.6667,
         "precision": 0.5,
         "recall": 1.0,
-        "auc": 1.0,
+        "auc": 0.5,
         "direction_acc": 1.0,
         "sign_acc": 1.0,
         "fpr": 1.0,
@@ -51,7 +51,7 @@
         "f1": 0.6667,
         "precision": 0.5,
         "recall": 1.0,
-        "auc": 1.0,
+        "auc": 0.5,
         "direction_acc": 1.0,
         "sign_acc": 1.0,
         "fpr": 1.0,
@@ -62,16 +62,16 @@
       {
         "id": "ext_4",
         "name": "5-Variable Nonlinear DAG [Runge 2019, Sci. Adv.]",
-        "f1": 0.6667,
-        "precision": 0.5,
+        "f1": 0.5,
+        "precision": 0.3333,
         "recall": 1.0,
-        "auc": 0.875,
+        "auc": 0.5,
         "direction_acc": 1.0,
         "sign_acc": 0.5,
-        "fpr": 0.5,
+        "fpr": 1.0,
         "correct": 4,
         "total": 4,
-        "fp": 4
+        "fp": 8
       }
     ]
   },
@@ -83,7 +83,7 @@
       "precision": 0.5,
       "recall": 1.0,
       "direction_accuracy": 1.0,
-      "auc": 1.0,
+      "auc": 0.5,
       "correct": 1,
       "total_gt": 1
     },
@@ -94,7 +94,7 @@
       "precision": 0.5,
       "recall": 1.0,
       "direction_accuracy": 1.0,
-      "auc": 1.0,
+      "auc": 0.5,
       "correct": 1,
       "total_gt": 1
     },
@@ -105,18 +105,18 @@
       "precision": 0.5,
       "recall": 1.0,
       "direction_accuracy": 1.0,
-      "auc": 1.0,
+      "auc": 0.5,
       "correct": 1,
       "total_gt": 1
     },
     {
       "id": "ext_4",
       "name": "5-Variable Nonlinear DAG [Runge 2019, Sci. Adv.]",
-      "f1": 0.6667,
-      "precision": 0.5,
+      "f1": 0.5,
+      "precision": 0.3333,
       "recall": 1.0,
       "direction_accuracy": 1.0,
-      "auc": 0.875,
+      "auc": 0.5,
       "correct": 4,
       "total_gt": 4
     }

@@ -110,12 +110,26 @@ class CausalInferenceEngine:
         rho_final_x = rho_xtoy[-1] if rho_xtoy else 0
         rho_final_y = rho_ytox[-1] if rho_ytox else 0
 
+        # Fallback: if rho values are already very high, skip convergence test
+        # (no room to increase — already at ceiling)
+        if rho_final_x > 0.8 and rho_final_y > 0.8:
+            converge_xtoy = True
+            converge_ytox = True
+
         if converge_xtoy and not converge_ytox and rho_final_x > 0.2:
             direction, strength = "X→Y", "strong" if rho_final_x > 0.5 else "moderate"
         elif converge_ytox and not converge_xtoy and rho_final_y > 0.2:
             direction, strength = "Y→X", "strong" if rho_final_y > 0.5 else "moderate"
-        elif converge_xtoy and converge_ytox and abs(rho_final_x - rho_final_y) < 0.1:
-            direction, strength = "bidirectional", "strong" if max(rho_final_x, rho_final_y) > 0.5 else "weak"
+        elif converge_xtoy and converge_ytox:
+            rho_diff = abs(rho_final_x - rho_final_y)
+            if rho_diff < 0.05:
+                direction, strength = "bidirectional", "strong" if max(rho_final_x, rho_final_y) > 0.5 else "weak"
+            elif rho_final_x > rho_final_y + 0.05:
+                direction, strength = "X→Y", "strong" if rho_final_x > 0.5 else "moderate"
+            elif rho_final_y > rho_final_x + 0.05:
+                direction, strength = "Y→X", "strong" if rho_final_y > 0.5 else "moderate"
+            else:
+                direction, strength = "bidirectional", "weak"
         else:
             direction, strength = "unclear", "no significant evidence"
 
