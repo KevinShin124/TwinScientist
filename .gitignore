@@ -22,3 +22,8 @@ data/*.db-wal
 # Temporary patches
 *_patch.py
 fix_report.py
+benchmark/data/cache/
+benchmark/data/cache/
+benchmark/test_data/
+benchmark/results/metrics.json
+benchmark/results/report.md
