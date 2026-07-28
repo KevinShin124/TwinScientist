@@ -28,3 +28,5 @@ benchmark/test_data/
 benchmark/results/metrics.json
 benchmark/results/report.md
 .zcode/
+data/sensors_backup/
+data/sensors/benchmark_*.csv
