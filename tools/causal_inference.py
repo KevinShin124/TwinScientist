@@ -135,29 +135,70 @@ class CausalInferenceEngine:
 
     async def _run_granger(self, x: list[float], y: list[float], max_lag: int = 5) -> dict:
         """
-        Granger 因果检验
+        Granger causality test.
 
-        核心原理: 如果 X 的过去值能显著改善对 Y 当前值的预测
-        （相比仅用 Y 自身的过去值），则称 X Granger-causes Y。
-
-        简化实现: 使用自回归模型残差的 F-test
+        Uses statsmodels (optimal) when available, falls back to simplified OLS F-test.
         """
         try:
             import numpy as np
-            from scipy import stats
 
             n = min(len(x), len(y))
             x_arr = np.array(x[:n])
             y_arr = np.array(y[:n])
 
-            # Restrict max_lag to valid range
             max_lag = min(max_lag, n // 4)
             if max_lag < 1:
-                return {"status": "insufficient_data", "sample_size": n, "max_valid_lag": max(n // 4, 1)}
+                return {"status": "insufficient_data", "sample_size": n}
+
+            # ---- Primary: statsmodels implementation ----
+            try:
+                from statsmodels.tsa.stattools import grangercausalitytests
+                import pandas as pd
+
+                data = pd.DataFrame({"y": y_arr, "x": x_arr})
+                gc_result = grangercausalitytests(data, maxlag=max_lag, verbose=False)
+
+                results_by_lag = {}
+                best_p = 1.0
+                best_lag = 1
+
+                for lag, test_tuple in gc_result.items():
+                    # test_tuple is (tests_dict, ...) where tests_dict has 'ssr_ftest' etc.
+                    tests_dict = test_tuple[0] if isinstance(test_tuple, tuple) else test_tuple
+                    ftest = tests_dict.get("ssr_ftest", tests_dict.get("params_ftest", (0, 1, 0)))
+                    f_stat = float(ftest[0])
+                    p_value = float(ftest[1])
+                    significant = p_value < 0.05
+
+                    results_by_lag[lag] = {
+                        "f_statistic": round(f_stat, 4),
+                        "p_value": round(p_value, 6),
+                        "significant": significant,
+                    }
+                    if p_value < best_p:
+                        best_p = p_value
+                        best_lag = lag
+
+                any_significant = any(
+                    r.get("significant", False) for r in results_by_lag.values()
+                )
+
+                return {
+                    "results_by_lag": results_by_lag,
+                    "overall_granger_causality": any_significant,
+                    "best_lag": best_lag,
+                    "min_p_value": round(best_p, 6),
+                    "note": "statsmodels grangercausalitytests (SSR F-test).",
+                }
+
+            except ImportError:
+                pass
+
+            # ---- Fallback: simplified OLS F-test ----
+            from scipy import stats
 
             results = {}
             for lag in range(1, max_lag + 1):
-                # Valid data window: [lag, n-lag)
                 start = lag
                 end = n - lag
                 obs_n = end - start
@@ -165,58 +206,38 @@ class CausalInferenceEngine:
                     results[lag] = {"status": "too_few_observations"}
                     continue
 
-                # Target: Y[lag:end]
                 y_target = y_arr[start:end]
-
-                # Lagged past values: column j = Y[start-j : end-j]
                 y_past_cols = [y_arr[start - j: end - j] for j in range(lag)]
                 y_past = np.column_stack(y_past_cols)
-
-                # Same for X past
                 x_past_cols = [x_arr[start - j: end - j] for j in range(lag)]
                 x_past = np.column_stack(x_past_cols)
-
-                # Combined design matrix (past Y + past X)
                 xy_past = np.hstack([y_past, x_past])
 
-                # OLS estimation
                 y_centered = y_target - y_target.mean()
-                ss_tot = np.sum(y_centered**2)
 
-                # Unrestricted: SSR(Y | Y_lags, X_lags)
                 try:
                     if xy_past.shape[0] >= xy_past.shape[1]:
                         beta = np.linalg.lstsq(xy_past, y_centered, rcond=None)[0]
-                        residuals_ur = y_centered - xy_past @ beta
-                        ssr_ur = float(np.sum(residuals_ur**2))
+                        ssr_ur = float(np.sum((y_centered - xy_past @ beta) ** 2))
                     else:
-                        ssr_ur = ss_tot
                         continue
 
-                    # Restricted: SSR(Y | Y_lags only)
                     if y_past.shape[0] >= y_past.shape[1]:
                         beta_r = np.linalg.lstsq(y_past, y_centered, rcond=None)[0]
-                        residuals_r = y_centered - y_past @ beta_r
-                        ssr_r = float(np.sum(residuals_r**2))
+                        ssr_r = float(np.sum((y_centered - y_past @ beta_r) ** 2))
                     else:
-                        ssr_r = ss_tot
                         continue
 
-                    # F-test with guard against division by zero when model fits perfectly
                     df1 = lag
                     df2 = obs_n - lag * 2
                     if ssr_ur < 1e-10:
-                        # Near-perfect fit — F-stat is effectively infinite, p ~ 0
                         results[lag] = {
-                            "f_statistic": 1000.0,
-                            "p_value": 0.0,
-                            "significant": True,
-                            "note": "near_perfect_fit",
+                            "f_statistic": 1000.0, "p_value": 0.0,
+                            "significant": True, "note": "near_perfect_fit",
                         }
                         continue
                     denom = ssr_ur / max(df2, 1)
-                    f_stat = ((ssr_r - ssr_ur) / df1) / denom
-                    f_stat = min(f_stat, 1000.0)  # cap to avoid overflow
+                    f_stat = min(((ssr_r - ssr_ur) / df1) / denom, 1000.0)
                     p_value = float(1 - stats.f.cdf(f_stat, df1, max(df2, 1)))
 
                     results[lag] = {
@@ -234,10 +255,11 @@ class CausalInferenceEngine:
                 "overall_granger_causality": any_significant,
                 "best_lag": min(results.keys(), key=lambda l: results[l].get("p_value", 1)) if results else None,
                 "min_p_value": min((r.get("p_value", 1) for r in results.values()), default=1),
-                "note": "Simplified Granger test. For production, install statsmodels.tsa.stattools.grangercausalitytests.",
+                "note": "Simplified Granger (OLS F-test). Install statsmodels for optimal implementation.",
             }
+
         except ImportError:
-            return {"status": "scipy_required", "message": "Install scipy for Granger causality computation"}
+            return {"status": "scipy_required", "message": "Install scipy for Granger causality"}
 
     async def _run_auto_select(self, feature_info: dict) -> dict:
         """

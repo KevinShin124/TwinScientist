@@ -182,15 +182,41 @@ def generate_report(data=None, output_path=None) -> str:
     lines.append("")
     lines.append("为进一步验证系统的因果发现能力不限于自建场景，在三个**学界公认**的时间序列因果发现标准测试上运行相同评估：")
     lines.append("")
-    lines.append("| Benchmark | 来源 | 因果结构 | 系统 F1 | 召回率 |")
-    lines.append("|---|---|---|---|---|")
-    lines.append("| Coupled Logistic Map (β=0.3) | Sugihara et al. 2012, *Science* | x→y 单向耦合 | 66.7% | 100% |")
-    lines.append("| Coupled Logistic Map (β=0.1) | Sugihara et al. 2012, *Science* | x→y 弱耦合 | 66.7% | 100% |")
-    lines.append("| VAR(2) Linear System | Granger 1969, *Econometrica* | x→y 滞后因果 | 0%* | 0% |")
-    lines.append("| 5-Variable Nonlinear DAG | Runge et al. 2019, *Science Advances* | 4 条非线性因果边 | 40.0% | 75.0% |")
-    lines.append("")
-    lines.append("> * VAR(2) 的 0% 是由于当前 Granger 实现为简化版本（`tools/causal_inference.py` 中标注了 \"Simplified Granger test. For production, install statsmodels\"）。标准 `statsmodels` 的 `grangercausalitytests` 可正确检测 VAR 系统的滞后因果关系。这是已知的实现差距，非方法学缺陷。")
-    lines.append("")
+
+    # Load external benchmark results dynamically
+    ext_path = RESULTS_DIR / "metrics_external.json"
+    ext_data = {}
+    if ext_path.exists():
+        import json as _json
+        with open(ext_path, "r", encoding="utf-8") as _f:
+            ext_data = _json.load(_f)
+
+    ext_scenarios = ext_data.get("per_scenario", [])
+    if ext_scenarios:
+        lines.append("| Benchmark | 来源 | F1 | 召回率 | AUC | 方向准确率 |")
+        lines.append("|---|---|---|---|---|---|")
+        source_map = {
+            "Logistic": "Sugihara et al. 2012, *Science*",
+            "VAR": "Granger 1969, *Econometrica*",
+            "5-Variable": "Runge et al. 2019, *Science Advances*",
+        }
+        for s in ext_scenarios:
+            sid = s.get("id", "")
+            name = s.get("name", "")
+            f1 = _format_pct(s.get("f1", 0))
+            rec = _format_pct(s.get("recall", 0))
+            auc = _format_pct(s.get("auc", 0))
+            dacc = _format_pct(s.get("direction_accuracy", 0))
+            src = "—"
+            for k, v in source_map.items():
+                if k in name:
+                    src = v
+                    break
+            lines.append(f"| {name} | {src} | {f1} | {rec} | {auc} | {dacc} |")
+        lines.append("")
+    else:
+        lines.append("> 运行 `py benchmark/runner.py --external` 生成外部 Benchmark 数据。")
+        lines.append("")
 
     # ── DALTON External Validation ──
     lines.append("## 6. 真实数据外部验证：DALTON 数据集")
@@ -199,29 +225,39 @@ def generate_report(data=None, output_path=None) -> str:
     lines.append("")
     lines.append("**Karmakar et al.** — DALTON (Daily Air Quality and Lifestyle Tracking Observatory Network)。印度低收入家庭室内空气质量传感器数据，公开发布于 GitHub。")
     lines.append("")
-    lines.append("### 6.2 验证方法")
+    lines.append("### 6.2 验证结果")
     lines.append("")
-    lines.append("选取论文中 5 项已发表的因果结论作为 ground truth，在 DALTON 数据上运行 TwinScientist 因果推断引擎，逐项对比：")
-    lines.append("")
-    lines.append("| # | 论文结论 | 系统检测结果 | 状态 |")
-    lines.append("|---|---|---|---|")
-    lines.append("| F1 | 温度↑ → PM2.5↑ | 检测到，方向正确 | ✅ 匹配 |")
-    lines.append("| F2 | 温度↑ → PM10↑ | 检测到，方向正确 | ✅ 匹配 |")
-    lines.append("| F3 | CO₂↑ → PM2.5↑（共享燃烧源） | 检测到，方向正确 | ✅ 匹配 |")
-    lines.append("| F4 | 湿度↑ → 温度↓（物理定律） | 检测到，方向正确 | ✅ 匹配 |")
-    lines.append("| F5 | VOC↑ → PM2.5↑（烹饪共排放） | 未检出 | ❌ 遗漏 |")
-    lines.append("")
-    lines.append("### 6.3 验证结果")
-    lines.append("")
-    lines.append("| 指标 | 数值 |")
-    lines.append("|---|---|")
-    lines.append("| 已发表结论匹配率 | **4/5（80%）** |")
-    lines.append("| 方向准确率 | **100%** |")
-    lines.append("| F1 | 72.7% |")
-    lines.append("| 假阳性 | 2 项（PMS2_5→T, CO₂→H，均为共享动态导致的伪相关） |")
-    lines.append("")
-    lines.append("> 💡 F5（VOC→PM2.5）的遗漏可能因为 DALTON 数据集中 VOC 传感器精度不足以捕捉烹饪共排放的细微变化。这是**数据质量问题**，非系统能力问题。")
-    lines.append("")
+
+    # Load DALTON validation results dynamically
+    dalton_path = RESULTS_DIR / "dalton_validation.json"
+    dalton_data = {}
+    if dalton_path.exists():
+        with open(dalton_path, "r", encoding="utf-8") as _f:
+            dalton_data = _json.load(_f)
+
+    dalton_metrics = dalton_data.get("metrics", {})
+    dalton_findings = dalton_data.get("per_finding", [])
+
+    if dalton_metrics:
+        lines.append("| 指标 | 数值 |")
+        lines.append("|---|---|")
+        lines.append(f"| 已发表结论匹配率 | **{dalton_metrics.get('correct', 0)}/{dalton_metrics.get('total', 0)}（{_format_pct(dalton_metrics.get('recall', 0))}）** |")
+        lines.append(f"| 方向准确率 | **{_format_pct(dalton_metrics.get('direction_accuracy', 0))}** |")
+        lines.append(f"| F1 | {_format_pct(dalton_metrics.get('f1', 0))} |")
+
+        lines.append("")
+        lines.append("| # | 论文结论 | 状态 |")
+        lines.append("|---|---|---|")
+        for f in dalton_findings:
+            if f.get("expected_sign") == "none":
+                status = "✅ 正确判定为无因果" if not f.get("detected") else "❌ 假阳性"
+            else:
+                status = "✅ 匹配" if f.get("detected") else "❌ 遗漏"
+            lines.append(f"| {f.get('cause')} → {f.get('effect')} | {f.get('detail', '')} | {status} |")
+        lines.append("")
+    else:
+        lines.append("> 运行 `py benchmark/dalton_validation.py` 生成 DALTON 验证数据。")
+        lines.append("")
 
     # ── Conclusion ──
     lines.append("## 7. 结论与建议")

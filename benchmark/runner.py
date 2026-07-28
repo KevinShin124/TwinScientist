@@ -245,10 +245,9 @@ def run_causal_inference(
                 elif method == "granger":
                     out = asyncio.run(_run_one("granger"))
                     if isinstance(out, dict):
-                        gc = out.get("overall_granger_causality", False)
                         p_val = out.get("min_p_value", 1.0)
                         granger_conf = 1.0 - min(p_val, 0.999)
-                        if gc and granger_conf >= GRANGER_MIN_CONF:
+                        if granger_conf >= GRANGER_MIN_CONF:
                             if granger_conf > best_conf:
                                 best_conf = granger_conf
                                 best_sign = "positive" if corr >= 0 else "negative"

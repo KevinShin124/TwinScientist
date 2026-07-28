@@ -157,7 +157,7 @@ def compute_scenario_metrics(
             direction_correct=(key in pred_edges),
             sign_correct=(pred_signs.get(key) == sign) if detected else None,
             confidence=pred_confs.get(key, 0.0),
-            detail="OK" if detected else "MISSED",
+            detail="因果边已检测" if detected else "未检测到（遗漏）",
         ))
 
     for cause, effect in null_pairs:
@@ -169,7 +169,7 @@ def compute_scenario_metrics(
             direction_correct=(not detected),
             sign_correct=None,
             confidence=pred_confs.get(key, 0.0),
-            detail="FALSE_POSITIVE" if detected else "CORRECT_NULL",
+            detail="假阳性（误报）" if detected else "正确判定为无因果",
         ))
 
     return m
