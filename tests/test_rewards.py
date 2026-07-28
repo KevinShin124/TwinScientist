@@ -506,7 +506,7 @@ class TestSDNNRMSSDDirectionality(unittest.TestCase):
     """测试 SDNN/RMSSD 在环境压力下的方向性"""
 
     def setUp(self):
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from gen_multimodal_simulator import BiometricModel
         self.model = BiometricModel(seed=42)
 
@@ -595,7 +595,7 @@ class TestPPGBaseline(unittest.TestCase):
 
     def test_ppg_baseline_contribution_is_1x(self):
         """PPG 的稳态 baseline 贡献应约等于 1× ppo_baseline"""
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from gen_multimodal_simulator import BiometricModel
 
         model = BiometricModel(seed=42)
@@ -635,7 +635,7 @@ class TestSubjectProfileKeys(unittest.TestCase):
 
     def test_profile_keys_match_generated(self):
         """SUBJECT_PROFILE_KEYS 应与 _generate_subject_profile 的键匹配"""
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from gen_multimodal_simulator import BiometricModel
 
         model = BiometricModel(seed=42)

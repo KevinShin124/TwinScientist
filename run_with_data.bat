@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0.."
+cd /d "%~dp0"
 
 REM ============================================================
 REM twinScientist 一键启动器 — 解压即用，无需额外配置
@@ -25,7 +25,7 @@ echo [OK] Python 已就绪
 echo.
 
 REM 检查数据目录
-set SENSORS_DIR=%~dp0twinScientist\data\sensors
+set SENSORS_DIR=%~dp0data\sensors
 if not exist "%SENSORS_DIR%\*.csv" (
     echo [WARN] 未检测到传感器数据文件！
     echo.

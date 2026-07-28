@@ -938,11 +938,11 @@ async def run_with_adapter(dataset_type: str, n_subjects: int = 20, max_iter: in
     if dataset_type == "simulator":
         # Use the existing gen_multimodal_simulator.py
         print("[Simulator] Using gen_multimodal_simulator.py ...")
-        sys.path.insert(0, str(Path(__file__).parent.parent))
+        sys.path.insert(0, str(Path(__file__).parent))
         from gen_multimodal_simulator import main as sim_main
         import subprocess
         result = subprocess.run([
-            sys.executable, str(Path(__file__).parent.parent / "gen_multimodal_simulator.py"),
+            sys.executable, str(Path(__file__).parent / "gen_multimodal_simulator.py"),
             "-n", str(n_subjects), "-d", "7", "-o", str(DATA_BASE),
         ], capture_output=True, text=True)
         print(result.stdout)

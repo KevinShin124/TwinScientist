@@ -10,7 +10,7 @@ Python + pip + 所有核心依赖已安装完毕。
 
 在 PowerShell 中执行：
 ```powershell
-cd "C:\Users\KevinShin\Desktop\TwinScientist--main3\twinScientist"
+cd "C:\Users\KevinShin\Desktop\TwinScientist"
 Copy-Item .env.example .env
 notepad .env
 ```
@@ -33,19 +33,16 @@ $env:BAILIAN_API_KEY = "sk-your-real-key"
 
 ### CLI 模式（单次运行）
 ```powershell
-cd twinScientist
 python main.py --question "高温环境对老年人心率变异性有何影响？" --domain "环境健康" --iterations 10
 ```
 
 ### 交互模式
 ```powershell
-cd twinScientist
 python main.py
 ```
 
 ### Web UI 模式
 ```powershell
-cd twinScientist
 python main.py --ui
 ```
 → 浏览器访问 http://127.0.0.1:7860
