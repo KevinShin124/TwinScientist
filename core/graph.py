@@ -275,6 +275,18 @@ def build_cognitive_graph() -> "CompiledGraph":
 
     checkpointer = MemorySaver()
 
+    # Global numpy sanitizer: patch msgpack serializer used by LangGraph
+    # (LangGraph uses msgpack via JsonPlusSerializer, not json.dumps)
+    import numpy as _np
+    from langgraph.checkpoint.serde import jsonplus as _jsonplus
+    _orig_msgpack_default = _jsonplus._msgpack_default
+    def _patched_msgpack_default(obj):
+        if isinstance(obj, (_np.integer,)): return int(obj)
+        if isinstance(obj, (_np.floating,)): return float(obj)
+        if isinstance(obj, _np.ndarray): return obj.tolist()
+        return _orig_msgpack_default(obj)
+    _jsonplus._msgpack_default = _patched_msgpack_default
+
     compiled = workflow.compile(
         interrupt_before=[],  # CLI mode: no interrupts. UI mode handles HITL via its own flow.
         interrupt_after=[],   # CLI mode: no interrupts.

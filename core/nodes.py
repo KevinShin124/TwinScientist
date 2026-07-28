@@ -298,6 +298,14 @@ def _build_evidence_entry(evidence_type: str, result: dict, method: str,
 
     # Fill statistical_basis and validation_results
     for key, val in result.items():
+        # Convert numpy types to native Python for JSON serialization
+        if hasattr(val, 'item'):
+            val = val.item()
+        elif isinstance(val, list):
+            val = [v.item() if hasattr(v, 'item') else v for v in val]
+        elif isinstance(val, dict):
+            val = {k: v.item() if hasattr(v, 'item') else v for k, v in val.items()}
+
         if key.startswith(("ccm_rho", "confiden", "library_sizes", "rho_at_each_size",
                            "results_by_lag", "overall_granger", "best_lag", "min_p",
                            "adf_t_statistic", "stationary_at")):
@@ -1493,7 +1501,17 @@ async def node_data_analysis(state: AgentState) -> dict:
         exp["results"]["analysis_pending"] = False
         break  # Only analyze the latest pending experiment
 
-    return {
+    # Sanitize numpy types for JSON serialization
+    import numpy as np
+    def _sanitize(obj):
+        if isinstance(obj, (np.integer,)): return int(obj)
+        if isinstance(obj, (np.floating,)): return float(obj)
+        if isinstance(obj, np.ndarray): return obj.tolist()
+        if isinstance(obj, dict): return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)): return [_sanitize(v) for v in obj]
+        return obj
+
+    return _sanitize({
         "experiment_records": experiments,
         "evidence_chains": evidence_chains,
         "current_action": "data_analysis",
@@ -1504,7 +1522,7 @@ async def node_data_analysis(state: AgentState) -> dict:
                 "CCM 收敛交叉映射检测非线性动态耦合，反事实推演估计干预效应。"
                 "每条证据都带有完整的统计依据（p值、效应量、置信区间），确保可追溯可复现。")
         ],
-    }
+    })
 
 
 # ============================================================
