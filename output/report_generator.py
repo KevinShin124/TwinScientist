@@ -8,6 +8,7 @@ Layer 9 - Item 28: Standardized Output Module
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,175 @@ STANDARDIZED_FIELDS = [
     "paper_abstract", "methods", "experiments_baselines",
     "experiments_metrics", "results_formula_verification", "references",
 ]
+
+
+# ============================================================
+# Helpers: render causal results into dynamic report sections
+# ============================================================
+
+def _ev_key(ev: dict, k: str, fallback="N/A"):
+    """Safe extraction from evidence dict with optional nested fallback."""
+    v = ev.get(k)
+    return str(v) if v is not None else fallback
+
+
+def _render_causal_results(evidence_chains: list[dict], experiments: list[dict]) -> str:
+    """
+    Render real causal inference results from evidence_chains.
+
+    Each evidence item contains method_used, statistical_basis, strength,
+    causal_direction, and content.  The per-experiment result_summary and
+    error info come from experiment_records.
+    """
+    if not evidence_chains:
+        return (
+            "### 9.1 当前状态\n\n"
+            "因果推断尚未执行。系统将在完成实验设计与数据加载后自动运行分析。\n"
+        )
+
+    lines = []
+    for idx, ev in enumerate(evidence_chains):
+        method = _ev_key(ev, "method_used")
+        direction = _ev_key(ev, "causal_direction")
+        raw_strength = ev.get("strength", 0.0)
+        # Guard: coerce non-numeric to 0.0 to prevent crash from NaN / None
+        if not isinstance(raw_strength, (int, float)) or math.isnan(raw_strength):
+            raw_strength = 0.0
+        strength_raw = raw_strength
+        stats = ev.get("statistical_basis", {}) or {}
+        provenance = _ev_key(ev, "provenance")
+
+        # Map evidence strength to label
+        if strength_raw >= 0.7:
+            label = "强"
+        elif strength_raw >= 0.4:
+            label = "中"
+        else:
+            label = "弱"
+        bar_len = int(strength_raw * 20)
+        bar = "█" * bar_len + "░" * (20 - bar_len)
+
+        lines.append(f"### 9.{idx+1} 分析 #{idx+1} — {method}\n")
+        lines.append(f"- **数据来源**: {provenance}")
+        lines.append(f"- **因果方向**: {direction}")
+        lines.append(f"- **证据强度**: {strength_raw:.3f} — {label}")
+        lines.append(f"- **强度柱**: [{bar}] {strength_raw*100:.0f}%")
+        lines.append("")
+
+        # --- Method-specific detail ---
+        if method == "ccm":
+            rho_xy = stats.get("ccm_rho_x_to_y", "N/A")
+            rho_yx = stats.get("ccm_rho_y_to_x", "N/A")
+            conf = stats.get("confidence", "N/A")
+            conv_xy = stats.get("convergence_X_to_Y", False)
+            conv_yx = stats.get("convergence_Y_to_X", False)
+            lines.append("| 指标 | 值 |")
+            lines.append("|------|-----|")
+            lines.append(f"| ρ(X→Y) | {rho_xy} |")
+            lines.append(f"| ρ(Y→X) | {rho_yx} |")
+            lines.append(f"| 收敛判定差值 | {conf} |")
+            lines.append(f"| X→Y 收敛 | {'✅ 是' if conv_xy else '❌ 否'} |")
+            lines.append(f"| Y→X 收敛 | {'✅ 是' if conv_yx else '❌ 否'} |")
+
+            # Convergence curve if available
+            rho_seq_xy = stats.get("rho_at_each_size_X_to_Y")
+            rho_seq_yx = stats.get("rho_at_each_size_Y_to_X")
+            lib_sizes = stats.get("library_sizes_tested")
+            if rho_seq_xy and isinstance(rho_seq_xy, list):
+                seq_str = " → ".join(f"{v:.3f}" for v in rho_seq_xy)
+                lines.append(f"| X→Y 收敛曲线 | {seq_str} |")
+            if rho_seq_yx and isinstance(rho_seq_yx, list):
+                seq_str = " → ".join(f"{v:.3f}" for v in rho_seq_yx)
+                lines.append(f"| Y→X 收敛曲线 | {seq_str} |")
+
+        elif method == "granger":
+            results_by_lag = stats.get("results_by_lag", {}) or {}
+            lines.append("| 滞后阶数 | F统计量 | p值 | 显著(p<0.05)? |")
+            lines.append("|---------|---------|-----|-------------|")
+            for lag in sorted(results_by_lag.keys()):
+                rec = results_by_lag[lag]
+                if isinstance(rec, dict):
+                    f_stat = rec.get("f_statistic", "—")
+                    p_val = rec.get("p_value", "—")
+                    sig = "✅ 显著" if rec.get("significant") else "❌ 不显著"
+                else:
+                    f_stat, p_val, sig = "—", "—", rec
+                lines.append(f"| {lag} | {f_stat} | {p_val} | {sig} |")
+            overall = stats.get("overall_granger_causality", False)
+            best_lag = stats.get("best_lag", "—")
+            min_p = stats.get("min_p_value", 1.0)
+            lines.append("")
+            lines.append(f"- **总体判断**: {'✅ 存在 Granger 因果关系' if overall else '❌ 未检测到显著 Granger 因果关系'}")
+            lines.append(f"- **最佳滞后阶数**: {best_lag}")
+            lines.append(f"- **最小 p 值**: {min_p}")
+
+        elif method == "counterfactual":
+            # The counterfactual stats may contain ATE and CI
+            ate_line = next((v for k, v in stats.items() if "treatment" in k), "N/A")
+            lines.append(f"- **平均干预效应(ATE)**: {ate_line}")
+
+        elif method in ("pc_fci", "psm", "bayesian_network", "instrumental_variable"):
+            # These store raw computed output in statistical_basis keys
+            raw_keys = [k for k in stats if not k.startswith("_")]
+            if raw_keys:
+                lines.append("**统计结果**:")
+                for k in raw_keys:
+                    v = stats[k]
+                    if isinstance(v, float):
+                        lines.append(f"- {k}: {v:.4f}")
+                    elif isinstance(v, bool):
+                        lines.append(f"- {k}: {'是' if v else '否'}")
+                    elif isinstance(v, dict):
+                        lines.append(f"- {k}: {json.dumps(v, ensure_ascii=False)[:200]}")
+                    else:
+                        lines.append(f"- {k}: {v}")
+
+        # Validation block
+        val = ev.get("validation_results", {}) or {}
+        if val:
+            lines.append(f"**验证**: {json.dumps(val, ensure_ascii=False)[:200]}")
+
+        lines.append("")
+        # Separator between items
+        if idx < len(evidence_chains) - 1:
+            lines.append("---\n")
+
+    # --- Overall parameter summary ---
+    best_strength = max((ev.get("strength", 0) for ev in evidence_chains), default=0)
+    avg_strength = sum(ev.get("strength", 0) for ev in evidence_chains) / max(len(evidence_chains), 1)
+    methods_used = list(dict.fromkeys(_ev_key(ev, "method_used") for ev in evidence_chains))
+    directions = [ev.get("causal_direction", "?") for ev in evidence_chains]
+
+    lines.append("\n### 多分析汇总")
+    lines.append("| 指标 | 值 |")
+    lines.append("|------|-----|")
+    lines.append(f"| 分析总数 | {len(evidence_chains)} |")
+    lines.append(f"| 使用的方法 | {', '.join(methods_used)} |")
+    lines.append(f"| 平均证据强度 | {avg_strength:.3f} |")
+    lines.append(f"| 最强证据 | {best_strength:.3f} |")
+    lines.append(f"| 因果方向 | {', '.join(directions)} |")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_evidence_detail(evidence_chains: list[dict]) -> list[str]:
+    """Return per-evidence detail lines for the appendix."""
+    out = []
+    for ev in evidence_chains:
+        ev_id = ev.get("id", "?")
+        method = _ev_key(ev, "method_used")
+        content = _ev_key(ev, "content")
+        sb = ev.get("statistical_basis", {}) or {}
+        # Extract the most important stat for compact display
+        p_val = sb.get("min_p_value", sb.get("min_p", "—"))
+        rho = sb.get("ccm_rho_x_to_y", "—")
+        stats_str = f"p_值={p_val}" if p_val != "—" else f"ρ={rho}" if rho != "—" else ""
+        out.append(f"\n- **{ev_id}** [{method}]: {content}")
+        if stats_str:
+            out.append(f"  - {stats_str}")
+        out.append(f"  - 证据强度: {ev.get('strength', '?')} | 方向: {_ev_key(ev, 'causal_direction')}")
+    return out
 
 
 class ReportGenerator:
@@ -225,31 +395,9 @@ PPG波形     交叉相关    缺失插补    时域统计   贝叶斯网络    
 ---
 
 ## 九、实验结果（Results）
-*注：以下为理论可行性验证框架，实际实验数据接入后将替换为实测结果*
+*以下结果由 node_data_analysis 节点执行真实因果推断运算得到，非文本生成。*
 
-### 9.1 理论验证
-假设环境因子 X 对生理指标 Y 的影响可建模为：
-
-```
-Y(t) = f(X(t)) + ε(t)
-```
-
-其中 f(·) 为非线性函数，ε(·) 为零均值噪声项。使用收敛交叉映射（CCM）：
-
-```
-ρ_E(x→y) > ρ_E(y→x) 且 ρ_E(x→y) → 显著正值（当 E 增大时单调递增）
-```
-
-这证明存在单向因果关系 x → y，且该关系具有 **收敛性证据**。
-
-### 9.2 参数汇总表
-| 参数 | 设定值 | 说明 |
-|------|--------|------|
-| 样本量 | N={max(30, len(hypothesis_tree)*10)} | 基于假设数量调整 |
-| 置信水平 | α = 0.05 | 标准显著性阈值 |
-| 嵌入维度 T | 3-5 | CCM 延迟嵌入参数 |
-| 假设置信度 | 先验={best_hyp.get('confidence_prior','?')}, 后验={best_hyp.get('confidence_posterior','?')} | Bayesian 量化 |
-| 平均后验 | {avg_posterior:.2f} | 所有假设的平均可信度 |
+{_render_causal_results(evidence_chains, experiments)}
 
 ---
 
@@ -280,7 +428,9 @@ Y(t) = f(X(t)) + ε(t)
 {f"| [最终胜者] | {best_hyp.get('title', '')[:20] if best_hyp else ''} | 优胜 | - |" if elimination_records else ""}
 
 ### 证据链汇总 ({len(evidence_chains)} 条)
-{self._format_table(evidence_items, ["type", "strength", "method", "direction"]) if evidence_items else "- [因果推断结果将从数据分析节点自动填充]"}
+{self._format_table(evidence_items, ["type", "method", "direction", "strength"]) if evidence_items else "- [因果推断结果将从数据分析节点自动填充]"}
+
+{"".join(_render_evidence_detail(evidence_chains)) if evidence_chains else ""}
 
 ---
 
