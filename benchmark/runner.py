@@ -550,6 +550,87 @@ def run_benchmark(
     return result
 
 
+def run_external_benchmarks(method: str = "all"):
+    """
+    Run external academic benchmarks (Sugihara 2012, Granger 1969, Runge 2019).
+    These are canonical tests from peer-reviewed literature with known ground truth.
+    """
+    from benchmark.external_benchmarks import get_external_benchmarks
+
+    methods_list = [method] if method != "all" else ["ccm", "granger"]
+    benchmarks = get_external_benchmarks()
+
+    print(f"\n{'='*60}")
+    print(f"  TwinScientist — External Academic Benchmarks")
+    print(f"  Benchmark sources: Sugihara 2012 (Science), Granger 1969 (Econometrica),")
+    print(f"                     Runge 2019 (Science Advances)")
+    print(f"  Method: {method}")
+    print(f"{'='*60}\n")
+
+    scenario_metrics = []
+
+    for i, bm in enumerate(benchmarks):
+        print(f"\n  Benchmark {i+1}/{len(benchmarks)}: {bm.name}")
+        data = bm.generate()
+
+        test_pairs = [(c, e) for c, e, _, _ in bm.ground_truth]
+        test_pairs += bm.null_pairs
+
+        print(f"    Testing {len(test_pairs)} pairs...")
+        predictions = run_causal_inference(data, test_pairs, methods=methods_list)
+
+        gt_pairs = [(c, e, s) for c, e, s, _ in bm.ground_truth]
+
+        sm = compute_scenario_metrics(
+            scenario_id=f"ext_{i+1}",
+            scenario_name=bm.name,
+            ground_truth_pairs=gt_pairs,
+            null_pairs=bm.null_pairs,
+            predictions=predictions,
+        )
+        print(f"    F1={sm.f1:.3f}  AUC={sm.auc:.3f}  P={sm.precision:.3f}  "
+              f"R={sm.recall:.3f}  DirAcc={sm.direction_accuracy:.3f}")
+        scenario_metrics.append(sm)
+
+    agg = aggregate_metrics(scenario_metrics)
+
+    result = BenchmarkResult(
+        timestamp=time.strftime("%Y-%m-%d %H:%M:%S"),
+        method=method,
+        n_scenarios=len(benchmarks),
+        scenario_metrics=scenario_metrics,
+        aggregate=agg,
+        baselines={},
+    )
+
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    results_path = RESULTS_DIR / "metrics_external.json"
+
+    serializable = {
+        "timestamp": result.timestamp,
+        "method": result.method,
+        "n_scenarios": result.n_scenarios,
+        "aggregate": result.aggregate,
+        "per_scenario": [
+            {
+                "id": m.scenario_id, "name": m.scenario_name,
+                "f1": round(m.f1, 4), "precision": round(m.precision, 4),
+                "recall": round(m.recall, 4),
+                "direction_accuracy": round(m.direction_accuracy, 4),
+                "auc": round(m.auc, 4),
+                "correct": m.n_correct_edges, "total_gt": m.n_ground_truth_edges,
+            }
+            for m in scenario_metrics
+        ],
+    }
+
+    with open(results_path, "w", encoding="utf-8") as f:
+        json.dump(serializable, f, indent=2, ensure_ascii=False)
+
+    print(f"\n  External benchmark results saved to: {results_path}")
+    return result
+
+
 # ============================================================
 # CLI
 # ============================================================
@@ -567,16 +648,24 @@ if __name__ == "__main__":
                         help="Force re-generation of synthetic data")
     parser.add_argument("--report", action="store_true",
                         help="Generate markdown report after benchmark")
+    parser.add_argument("--external", action="store_true",
+                        help="Run external academic benchmarks (Sugihara/Granger/Runge)")
 
     args = parser.parse_args()
 
-    scenario_ids = [args.scenario] if args.scenario else None
+    if args.external:
+        result = run_external_benchmarks(method=args.method)
+        if args.report:
+            from benchmark.report import generate_report
+            generate_report(result)
+    else:
+        scenario_ids = [args.scenario] if args.scenario else None
 
-    result = run_benchmark(
-        method=args.method,
-        scenario_ids=scenario_ids,
-        force_regenerate=args.force,
-    )
+        result = run_benchmark(
+            method=args.method,
+            scenario_ids=scenario_ids,
+            force_regenerate=args.force,
+        )
 
     if args.report:
         from benchmark.report import generate_report

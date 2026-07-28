@@ -1,0 +1,72 @@
+{
+  "dataset": "DALTON (Karmakar et al.)",
+  "n_rows": 200,
+  "n_variables": 9,
+  "metrics": {
+    "f1": 0.7273,
+    "precision": 0.6667,
+    "recall": 0.8,
+    "direction_accuracy": 1.0,
+    "fpr": 1.0,
+    "correct": 4,
+    "total": 5
+  },
+  "per_finding": [
+    {
+      "cause": "T",
+      "effect": "PMS2_5",
+      "expected_sign": "positive",
+      "detected": true,
+      "confidence": 1.0,
+      "detail": "OK"
+    },
+    {
+      "cause": "T",
+      "effect": "PMS10",
+      "expected_sign": "positive",
+      "detected": true,
+      "confidence": 1.0,
+      "detail": "OK"
+    },
+    {
+      "cause": "CO2",
+      "effect": "PMS2_5",
+      "expected_sign": "positive",
+      "detected": true,
+      "confidence": 1.0,
+      "detail": "OK"
+    },
+    {
+      "cause": "H",
+      "effect": "T",
+      "expected_sign": "negative",
+      "detected": true,
+      "confidence": 1.0,
+      "detail": "OK"
+    },
+    {
+      "cause": "C2H5OH",
+      "effect": "PMS2_5",
+      "expected_sign": "positive",
+      "detected": false,
+      "confidence": 0.0,
+      "detail": "MISSED"
+    },
+    {
+      "cause": "PMS2_5",
+      "effect": "T",
+      "expected_sign": "none",
+      "detected": true,
+      "confidence": 1.0,
+      "detail": "FALSE_POSITIVE"
+    },
+    {
+      "cause": "CO2",
+      "effect": "H",
+      "expected_sign": "none",
+      "detected": true,
+      "confidence": 1.0,
+      "detail": "FALSE_POSITIVE"
+    }
+  ]
+}
