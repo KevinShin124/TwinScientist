@@ -197,7 +197,7 @@ def run_causal_inference(
     if methods is None:
         methods = ["ccm", "granger"]
 
-    GRANGER_MIN_CONF = 0.90  # Granger: 1-p >= 0.90 => p <= 0.10
+    GRANGER_MIN_CONF = 0.85  # Granger: 1-p >= 0.85 => p <= 0.15
 
     results = []
     for cause, effect in pairs:
@@ -213,7 +213,6 @@ def run_causal_inference(
             results.append((cause, effect, None, None))
             continue
 
-        # Use raw data (causal signal is in levels, not differences)
         x_list = x_arr[:n].tolist()
         y_list = y_arr[:n].tolist()
         corr = float(np.corrcoef(x_arr[:n], y_arr[:n])[0, 1])
@@ -221,37 +220,27 @@ def run_causal_inference(
         best_sign = None
         best_conf = 0.0
         detected = False
-        used_method = ""
 
         async def _run_one(method: str):
             from tools.causal_inference import CausalInferenceEngine
             engine = CausalInferenceEngine()
             return await engine.run(method, x=x_list, y=y_list)
 
-        # Strategy: Granger as primary detector, CCM as direction filter.
-        # CCM direction "Y→X" (wrong direction, Unicode arrow) vetoes Granger positives.
-
-        ccm_dir = None  # track CCM direction for filtering
-        try:
-            out_c = asyncio.run(_run_one("ccm"))
-            if isinstance(out_c, dict):
-                ccm_dir = out_c.get("causal_direction", "unclear")
-        except Exception:
-            pass
-
         for method in methods:
             try:
                 if method == "ccm":
-                    # CCM contributes only if we haven't already decided via Granger
-                    if not detected and ccm_dir and ("X→Y" in str(ccm_dir) or "bidirectional" in str(ccm_dir)):
-                        rho_xy = out_c.get("ccm_rho_x_to_y", 0) if isinstance(out_c, dict) else 0
-                        rho_yx = out_c.get("ccm_rho_y_to_x", 0) if isinstance(out_c, dict) else 0
-                        max_rho = max(rho_xy, rho_yx)
-                        if max_rho > best_conf:
-                            best_conf = max_rho
-                            best_sign = "positive" if corr >= 0 else "negative"
-                            detected = True
-                            used_method = "ccm"
+                    out = asyncio.run(_run_one("ccm"))
+                    if isinstance(out, dict):
+                        direction = out.get("causal_direction", "unclear")
+                        # CCM standalone: only accept if clear direction X→Y
+                        if direction in ("X→Y", "bidirectional"):
+                            rho_xy = out.get("ccm_rho_x_to_y", 0)
+                            rho_yx = out.get("ccm_rho_y_to_x", 0)
+                            max_rho = max(rho_xy, rho_yx)
+                            if max_rho > best_conf:
+                                best_conf = max_rho
+                                best_sign = "positive" if corr >= 0 else "negative"
+                                detected = True
 
                 elif method == "granger":
                     out = asyncio.run(_run_one("granger"))
@@ -260,16 +249,10 @@ def run_causal_inference(
                         p_val = out.get("min_p_value", 1.0)
                         granger_conf = 1.0 - min(p_val, 0.999)
                         if gc and granger_conf >= GRANGER_MIN_CONF:
-                            # CCM direction filter: reject if CCM says opposite direction
-                            # CCM returns Unicode arrows: "X→Y", "Y→X", "bidirectional", "unclear"
-                            if ccm_dir and "Y→X" in str(ccm_dir):
-                                # Opposite direction — likely spurious correlation
-                                continue
                             if granger_conf > best_conf:
                                 best_conf = granger_conf
                                 best_sign = "positive" if corr >= 0 else "negative"
                                 detected = True
-                                used_method = "granger"
 
             except Exception as e:
                 print(f"    [WARN] {method}({cause}, {effect}): {e}")
