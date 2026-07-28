@@ -27,3 +27,4 @@ benchmark/data/cache/
 benchmark/test_data/
 benchmark/results/metrics.json
 benchmark/results/report.md
+.zcode/
