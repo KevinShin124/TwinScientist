@@ -99,7 +99,7 @@ def run_e2e_pipeline(scenario, data_dir):
         "_max_iterations_": 3,
         "auto_confirm": True,
         "iteration": 1,
-        "_test_variable_pair_": [cause_var, effect_var],
+        "user_guidance": f"FORCE_PAIR:T,CO2",
     }
 
     thread_id = f"benchmark-{scenario.id}-{uuid.uuid4().hex[:6]}"

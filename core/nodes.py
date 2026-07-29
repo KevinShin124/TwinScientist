@@ -1344,6 +1344,14 @@ async def node_data_analysis(state: AgentState) -> dict:
                         raise ValueError("No causal pairs found in flat CSV")
 
                     # Rotate across experiments
+                    # Support FORCE_PAIR:T,CO2 override from user_guidance
+                    for guidance in [state.get("user_guidance", "")]:
+                        if guidance and guidance.startswith("FORCE_PAIR:"):
+                            parts = guidance.split(":")[1].split(",")
+                            if len(parts) == 2 and parts[0] in ts_data and parts[1] in ts_data:
+                                pair_options = [(parts[0], parts[1], f"{parts[0]} -> {parts[1]}")]
+                                break
+
                     exp_count = len([e for e in experiments if e.get("results", {}).get("analysis_complete")])
                     pair_idx = exp_count % len(pair_options)
                     x_key, y_key, pair_label = pair_options[pair_idx]
