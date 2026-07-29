@@ -1,6 +1,47 @@
 {
-  "timestamp": "2026-07-29 02:48:20",
-  "n_scenarios": 0,
-  "aggregate": {},
-  "per_scenario": []
+  "timestamp": "2026-07-29 16:34:03",
+  "n_scenarios": 1,
+  "aggregate": {
+    "n_scenarios": 1,
+    "total_ground_truth_edges": 1,
+    "total_detected_correctly": 0,
+    "micro_precision": 0.0,
+    "micro_recall": 0.0,
+    "micro_f1": 0.0,
+    "macro_precision": 0.0,
+    "macro_recall": 0.0,
+    "macro_f1": 0.0,
+    "macro_direction_accuracy": 0.0,
+    "macro_sign_accuracy": 0.0,
+    "macro_false_positive_rate": 0.5,
+    "macro_auc": 0.5,
+    "per_scenario": [
+      {
+        "id": "s1_temp_hr",
+        "name": "温度 → 心率（单因果链）",
+        "f1": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "auc": 0.5,
+        "direction_acc": 0.0,
+        "sign_acc": 0.0,
+        "fpr": 0.5,
+        "correct": 0,
+        "total": 1,
+        "fp": 1
+      }
+    ]
+  },
+  "per_scenario": [
+    {
+      "id": "s1_temp_hr",
+      "name": "温度 → 心率（单因果链）",
+      "f1": 0.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "direction_accuracy": 0.0,
+      "correct": 0,
+      "total_gt": 1
+    }
+  ]
 }

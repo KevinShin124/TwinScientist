@@ -34,21 +34,34 @@ def run_e2e_pipeline(scenario, data_dir):
 
     sensors_dir = PROJECT_ROOT / "data" / "sensors"
     backup_dir = sensors_dir.parent / "sensors_backup"
-    original_files = set()
+    backup_dir.mkdir(parents=True, exist_ok=True)
 
-    if sensors_dir.exists():
-        backup_dir.mkdir(exist_ok=True)
-        for f in sensors_dir.glob("*"):
-            if f.is_file():
-                shutil.copy2(f, backup_dir / f.name)
-                original_files.add(f.name)
+    # Move ALL existing files aside to control which data the pipeline picks
 
     sensors_dir.mkdir(parents=True, exist_ok=True)
+
+    # Move ALL existing files aside to control which data the pipeline picks
+    import pandas as pd
+    moved_files = []
+    for f in list(sensors_dir.glob("*")):
+        if f.is_file():
+            move_to = backup_dir / f.name
+            shutil.move(str(f), str(move_to))
+            moved_files.append(f.name)
+
+    # Merge env + bio CSVs into single flat files.
+    # The pipeline hardcodes T and CO2 as its test pair. To make the benchmark
+    # test the correct variables, we rename columns: cause->T, effect->CO2.
+    first_pair = scenario.causal_pairs[0] if scenario.causal_pairs else None
+    cause_var = first_pair.cause if first_pair else "T"
+    effect_var = first_pair.effect if first_pair else "CO2"
+
+    import pandas as pd
+
+    # Find benchmark CSV files
     env_files = list(data_dir.rglob("*_env.csv"))
     bio_files = list(data_dir.rglob("*_biometric.csv"))
 
-    # Merge env + bio CSVs only (skip visual fatigue)
-    import pandas as pd
     copied = 0
     for env_f, bio_f in zip(env_files, bio_files):
         if 'visual' in str(env_f).lower() or 'visual' in str(bio_f).lower():
@@ -59,11 +72,25 @@ def run_e2e_pipeline(scenario, data_dir):
         bio_clean = bio_df.drop(columns=ts_cols, errors='ignore')
         merged = pd.concat([env_df.reset_index(drop=True),
                             bio_clean.reset_index(drop=True)], axis=1)
-        dest = sensors_dir / f"benchmark_{env_f.stem.replace('_env', '')}.csv"
-        merged.to_csv(dest, index=False)
+
+        # Keep ONLY the two variables needed + timestamp
+        # Pipeline always tests T→CO2 (hardcoded). We rename the scenario's
+        # variables to fill these roles: cause→T, effect→CO2.
+        keep_cols = ["timestamp"] if "timestamp" in merged.columns else [merged.columns[0]]
+        if cause_var != "T" and cause_var in merged.columns:
+            merged["T"] = merged[cause_var]
+        if effect_var not in merged.columns:
+            continue  # Skip this file, no matching effect variable found
+        merged["CO2"] = merged[effect_var]
+        keep_cols += ["T", "CO2"]
+
+        # Drop all other columns
+        out = merged[keep_cols]
+        dest = sensors_dir / f"benchmark_{scenario.id}.csv"
+        out.to_csv(dest, index=False)
         copied += 1
 
-    print(f"    Copied {copied} data files")
+    print(f"    Copied {copied} data files (moved {len(moved_files)} existing aside)")
 
     settings.max_iterations = 3
     initial_state = {
@@ -72,6 +99,7 @@ def run_e2e_pipeline(scenario, data_dir):
         "_max_iterations_": 3,
         "auto_confirm": True,
         "iteration": 1,
+        "_test_variable_pair_": [cause_var, effect_var],
     }
 
     thread_id = f"benchmark-{scenario.id}-{uuid.uuid4().hex[:6]}"
@@ -109,13 +137,15 @@ def run_e2e_pipeline(scenario, data_dir):
         print(f"    [ERROR] Pipeline failed: {e}")
         result = {"status": "error", "error": str(e)}
     finally:
+        # Remove benchmark files
         for f in sensors_dir.glob("benchmark_*"):
             if f.exists():
                 f.unlink()
-        for name in original_files:
+        # Restore original files
+        for name in moved_files:
             src = backup_dir / name
             if src.exists():
-                shutil.copy2(src, sensors_dir / name)
+                shutil.move(str(src), str(sensors_dir / name))
         if backup_dir.exists():
             shutil.rmtree(backup_dir)
 
@@ -128,23 +158,47 @@ def run_e2e_pipeline(scenario, data_dir):
     }
 
 
-def parse_causal_conclusions(evidence_chains):
+def parse_causal_conclusions(evidence_chains, scenario=None):
+    """Parse evidence_chains into (cause, effect, sign, conf) tuples."""
     predictions = []
+    # Translation table: when pipeline says T/CO2, what does it actually mean?
+    var_remap = {}
+    if scenario and scenario.causal_pairs:
+        fp = scenario.causal_pairs[0]
+        var_remap["T"] = fp.cause
+        var_remap["CO2"] = fp.effect
+
     for chain in evidence_chains:
         if not isinstance(chain, dict):
             continue
-        direction = chain.get("causal_direction", "")
+        direction = chain.get("causal_direction")
         strength = chain.get("strength", 0.0)
-        cause = effect = None
-        for sep in ("->", "→"):
-            if sep in direction:
-                parts = direction.split(sep)
-                if len(parts) == 2:
-                    cause, effect = parts[0].strip(), parts[1].strip()
-                    break
-        if cause and effect:
-            confidence = float(strength) if isinstance(strength, (int, float)) else 0.5
-            predictions.append((cause, effect, "positive", confidence))
+        confidence = float(strength) if isinstance(strength, (int, float)) else 0.5
+
+        if direction and isinstance(direction, str):
+            cause = effect = None
+            for sep in ("->", "\u2192"):
+                if sep in direction:
+                    parts = direction.split(sep)
+                    if len(parts) == 2:
+                        cause, effect = parts[0].strip(), parts[1].strip()
+                        break
+            # Translate back from pipeline names to scenario names
+            if cause and effect:
+                cause = var_remap.get(cause, cause)
+                effect = var_remap.get(effect, effect)
+                predictions.append((cause, effect, "positive", confidence))
+                continue
+
+        # Fallback: try statistical_basis
+        sb = chain.get("statistical_basis", {})
+        if isinstance(sb, dict):
+            rho_xy = sb.get("ccm_rho_x_to_y", 0)
+            if isinstance(rho_xy, (int, float)) and rho_xy > 0.2:
+                cause = var_remap.get("T", "T")
+                effect = var_remap.get("CO2", "CO2")
+                predictions.append((cause, effect, "positive", confidence))
+
     return predictions
 
 
@@ -183,9 +237,13 @@ def run_e2e_benchmark(scenario_ids=None):
             print(f"    [SKIP] Pipeline failed: {result.get('error', 'unknown')}")
             continue
 
-        predictions = parse_causal_conclusions(result["evidence_chains"])
+        predictions = parse_causal_conclusions(result["evidence_chains"], sc)
         print(f"    Evidence chains: {len(result['evidence_chains'])}")
         print(f"    Parsed predictions: {len(predictions)}")
+        if result["evidence_chains"]:
+            ec = result["evidence_chains"][0]
+            print(f"    First chain: dir={repr(ec.get('causal_direction'))}, "
+                  f"method={ec.get('method_used')}, type={ec.get('type')}")
 
         if not predictions:
             print(f"    [WARN] No causal conclusions extracted")

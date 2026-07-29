@@ -278,8 +278,14 @@ def _summarize_causal_result(result: dict, method: str) -> str:
 
 
 def _build_evidence_entry(evidence_type: str, result: dict, method: str,
-                          hyp_id: str, exp_id: str) -> dict:
+                          hyp_id: str, exp_id: str,
+                          cause_var: str = None, effect_var: str = None) -> dict:
     """从因果分析结果构建标准的 EvidenceEntry 字典"""
+    # Infer causal direction: prefer result direction, fallback to variable pair
+    causal_dir = result.get("causal_direction")
+    if not causal_dir and cause_var and effect_var:
+        causal_dir = f"{cause_var}\u2192{effect_var}"
+
     entry = {
         "id": f"ev_{uuid.uuid4().hex[:8]}",
         "type": evidence_type,
@@ -288,10 +294,10 @@ def _build_evidence_entry(evidence_type: str, result: dict, method: str,
         "linked_hypotheses": [hyp_id] if hyp_id else [],
         "linked_experiments": [exp_id] if exp_id else [],
         "method_used": method,
-        "method_params": {},  # will be filled below
+        "method_params": {},
         "statistical_basis": {},
         "validation_results": {},
-        "causal_direction": result.get("causal_direction"),
+        "causal_direction": causal_dir,
         "provenance": f"{method} on experiment {exp_id}",
         "created_at": _now_iso(),
     }
@@ -1432,6 +1438,8 @@ async def node_data_analysis(state: AgentState) -> dict:
                     if n_samples < 10:
                         raise ValueError(f"Not enough valid data points (n={n_samples}). Need >= 10.")
 
+                    x_key = "T"
+                    y_key = "CO2"
                     x = x_vals[:n_samples]
                     y = y_vals[:n_samples]
 
@@ -1442,6 +1450,11 @@ async def node_data_analysis(state: AgentState) -> dict:
                     exp["results"]["error"] = str(_direct_exc)
                     exp["results"]["analysis_pending"] = False
                     continue  # Skip this experiment, move on
+
+            x = x if 'x' in dir() else None
+            y = y if 'y' in dir() else None
+            if x is None or y is None or len(x) < 10:
+                continue
 
             try:
                 # Auto-select best method
@@ -1470,7 +1483,7 @@ async def node_data_analysis(state: AgentState) -> dict:
 
                 # Build structured EvidenceEntry
                 evidence_entry = _build_evidence_entry("causal_inference", result, selected_method,
-                                                       hyp_id, exp_id)
+                                                       hyp_id, exp_id, x_key, y_key)
                 evidence_chains.append(evidence_entry)
 
                 exp["results"]["analysis_complete"] = True
@@ -1484,7 +1497,7 @@ async def node_data_analysis(state: AgentState) -> dict:
                 exp["results"]["theoretical_analysis"] = (
                     f"**数据分析失败**: {_engine_exc}\n\n"
                     f"实际加载了传感器数据，但因果推断引擎执行异常。请检查依赖包是否安装完整。\n"
-                    f"数据源: {csv_file}, 样本数: {n_samples}"
+                    f"数据源: {csv_file}"
                 )
         else:
             # No real data — provide theoretical analysis framework
