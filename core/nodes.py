@@ -58,7 +58,14 @@ logger = logging.getLogger(__name__)
 
 import functools
 
-_CONTROL_FIELDS = ("_max_iterations_", "iteration", "consecutive_failures")
+_CONTROL_FIELDS = ("_max_iterations_", "iteration", "consecutive_failures", "should_terminate", "stop_reason")
+_CONTROL_FIELD_DEFAULTS = {
+    "_max_iterations_": 200,
+    "iteration": 0,
+    "consecutive_failures": 0,
+    "should_terminate": False,
+    "stop_reason": "",
+}
 
 
 def carry_control_fields(func):
@@ -74,7 +81,7 @@ def carry_control_fields(func):
             result = {}
         for key in _CONTROL_FIELDS:
             if key not in result:
-                result[key] = state.get(key, 0 if key != "_max_iterations_" else 200)
+                result[key] = state.get(key, _CONTROL_FIELD_DEFAULTS[key])
         return result
     return wrapper
 
@@ -1461,7 +1468,15 @@ async def node_data_analysis(state: AgentState) -> dict:
 
             x = x if 'x' in dir() else None
             y = y if 'y' in dir() else None
-            if x is None or y is None or len(x) < 10:
+            if x is None or y is None:
+                logger.warning(f"[DataAnalysis] Skipping experiment {exp_id}: failed to extract time series data (x={type(x).__name__}, y={type(y).__name__})")
+                exp["results"]["error"] = "无法从CSV提取有效的时序数据"
+                exp["results"]["analysis_pending"] = False
+                continue
+            if len(x) < 10:
+                logger.warning(f"[DataAnalysis] Skipping experiment {exp_id}: insufficient samples ({len(x)} < 10)")
+                exp["results"]["error"] = f"样本量不足 ({len(x)} < 10)"
+                exp["results"]["analysis_pending"] = False
                 continue
 
             try:
@@ -1960,6 +1975,24 @@ async def node_termination_eval(state: dict) -> dict:
     hypothesis space focus, cross-disciplinary transfer potential.
     """
     from core.llm_client import QwenClient  # for _hypothesis_statement_similarity
+
+    # === Check Orchestrator's stop signal FIRST ===
+    # Orchestrator may have already decided to stop (max rounds reached, convergence, etc.)
+    # This check MUST come before any independent termination computation to prevent
+    # the infinite loop bug where termination_eval ignores the orchestrator's decision.
+    orch_stop = state.get("_orch_stop_check")
+    if orch_stop and orch_stop.get("stop", False):
+        orch_reason = orch_stop.get("reason", "Orchestrator已决定终止")
+        logger.warning(f"[TerminationEval] Honoring Orchestrator stop signal: {orch_reason}")
+        return {
+            "should_terminate": True,
+            "stop_reason": f"Orchestrator终止: {orch_reason}",
+            "__decision": "TERMINATE",
+            "current_action": "termination_eval",
+            "iteration": state.get("iteration", 0),
+            "_max_iterations_": state.get("_max_iterations_", 200),
+            "consecutive_failures": state.get("consecutive_failures", 0),
+        }
 
     evidence_chains = state.get("evidence_chains", [])
     exploration_exhausted = state.get("exploration_exhausted", False)
