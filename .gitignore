@@ -10,6 +10,10 @@ __pycache__/
 
 # Generated report
 output/scientific_hypothesis_report.md
+output/technical_document.md
+output/technical_document.docx
+output/technical_document.pdf
+output/~$*.docx
 
 # Runtime databases
 data/*.db
