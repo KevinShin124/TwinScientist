@@ -15,12 +15,15 @@ Usage:
     demo = create_demo(agent_app=cognitive_graph)
     demo.launch(server_name="0.0.0.0", server_port=7860)
 """
-
+	
 import gradio as gr
 import json
 import os
 from pathlib import Path
 from typing import Any
+from datetime import datetime, date
+from uuid import UUID
+from decimal import Decimal
 
 # Import new modules from core
 try:
@@ -34,6 +37,32 @@ try:
     HAS_EDUCATION = True
 except ImportError:
     HAS_EDUCATION = False
+
+
+def _safe_json_default(obj):
+    """Convert non-JSON-serializable types to a safe representation for json.dumps."""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, UUID):
+        return str(obj)
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (bytes, bytearray)):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, (set, frozenset)):
+        return list(obj)
+    if hasattr(obj, "item"):  # numpy scalars that survived sanitization
+        return obj.item()
+    # Last resort: convert to string
+    try:
+        return str(obj)
+    except Exception:
+        return f"<{type(obj).__name__}>"
+
+
+def _safe_json_dumps(data):
+    """json.dumps with fallback for non-serializable types."""
+    return json.dumps(data, ensure_ascii=False, default=_safe_json_default)
 
 
 def get_data_status() -> str:
@@ -237,7 +266,7 @@ class TwinScientistUI:
                         debate_md = self.get_debate_display(debate_records)
 
                         # Stream structured events for UI consumption
-                        log_line = f"[EVENT]{json.dumps({'node': node_name, 'state': node_data}, ensure_ascii=False)}\n"
+                        log_line = f"[EVENT]{_safe_json_dumps({'node': node_name, 'state': node_data})}\n"
                         yield log_line, "", progress_md_content, hypo_md, debate_md, report_content
                     else:
                         yield f"{event}\n", "", "", "", "", report_content
