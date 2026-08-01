@@ -237,7 +237,7 @@ class TwinScientistUI:
                 async for event in self.agent_app.astream(
                     initial_state,
                     stream_mode="updates",
-                    config={"configurable": {"thread_id": thread_id}, "recursion_limit": max_iterations * 10},
+                    config={"configurable": {"thread_id": thread_id}, "recursion_limit": max(max_iterations * 15, 200)},
                 ):
                     if isinstance(event, dict):
                         node_name = list(event.keys())[0]
