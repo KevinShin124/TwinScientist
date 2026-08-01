@@ -68,11 +68,28 @@ _CONTROL_FIELD_DEFAULTS = {
 }
 
 
+def _sanitize_numpy(obj):
+    """Recursively convert numpy types (keys + values) to native Python for JSON serialization."""
+    import numpy as _np
+    if isinstance(obj, (_np.integer,)): return int(obj)
+    if isinstance(obj, (_np.floating,)): return float(obj)
+    if isinstance(obj, (_np.bool_,)): return bool(obj)
+    if isinstance(obj, _np.ndarray): return obj.tolist()
+    if isinstance(obj, dict):
+        return {_sanitize_numpy(k): _sanitize_numpy(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_numpy(v) for v in obj]
+    return obj
+
+
 def carry_control_fields(func):
     """
     Decorator: auto-carry _max_iterations_, iteration, consecutive_failures
     across ALL node return dicts. Prevents LangGraph state merge corruption
     when a node forgets to return these fields.
+
+    Also recursively sanitizes numpy types from keys and values to prevent
+    JSON serialization errors in the LangGraph checkpointer.
     """
     @functools.wraps(func)
     async def wrapper(state: dict) -> dict:
@@ -82,7 +99,7 @@ def carry_control_fields(func):
         for key in _CONTROL_FIELDS:
             if key not in result:
                 result[key] = state.get(key, _CONTROL_FIELD_DEFAULTS[key])
-        return result
+        return _sanitize_numpy(result)
     return wrapper
 
 
@@ -317,7 +334,8 @@ def _build_evidence_entry(evidence_type: str, result: dict, method: str,
         elif isinstance(val, list):
             val = [v.item() if hasattr(v, 'item') else v for v in val]
         elif isinstance(val, dict):
-            val = {k: v.item() if hasattr(v, 'item') else v for k, v in val.items()}
+            val = {(k.item() if hasattr(k, 'item') else k): (v.item() if hasattr(v, 'item') else v)
+                   for k, v in val.items()}
 
         if key.startswith(("ccm_rho", "confiden", "library_sizes", "rho_at_each_size",
                            "results_by_lag", "overall_granger", "best_lag", "min_p",
@@ -1543,7 +1561,7 @@ async def node_data_analysis(state: AgentState) -> dict:
         if isinstance(obj, (np.integer,)): return int(obj)
         if isinstance(obj, (np.floating,)): return float(obj)
         if isinstance(obj, np.ndarray): return obj.tolist()
-        if isinstance(obj, dict): return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, dict): return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)): return [_sanitize(v) for v in obj]
         return obj
 
