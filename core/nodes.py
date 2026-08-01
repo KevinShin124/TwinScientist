@@ -69,15 +69,31 @@ _CONTROL_FIELD_DEFAULTS = {
 
 
 def _sanitize_numpy(obj):
-    """Recursively convert numpy types (keys + values) to native Python for JSON serialization."""
+    """Recursively convert numpy/pandas types (keys + values) to native Python for JSON serialization."""
     import numpy as _np
+    # numpy scalars
     if isinstance(obj, (_np.integer,)): return int(obj)
     if isinstance(obj, (_np.floating,)): return float(obj)
     if isinstance(obj, (_np.bool_,)): return bool(obj)
-    if isinstance(obj, _np.ndarray): return obj.tolist()
+    if isinstance(obj, (_np.str_,)): return str(obj)
+    if isinstance(obj, (_np.bytes_,)): return obj.decode("utf-8") if hasattr(obj, "decode") else bytes(obj)
+    if isinstance(obj, (_np.datetime64,)): return str(obj)
+    if isinstance(obj, (_np.timedelta64,)): return str(obj)
+    if isinstance(obj, _np.ndarray): return _sanitize_numpy(obj.tolist())
+    # pandas types (best-effort, pandas may not be installed)
+    try:
+        import pandas as _pd
+        if isinstance(obj, (_pd.Timestamp, _pd.Timedelta)): return str(obj)
+        if isinstance(obj, _pd.DataFrame): return _sanitize_numpy(obj.to_dict(orient="records"))
+        if isinstance(obj, _pd.Series): return _sanitize_numpy(obj.tolist())
+    except ImportError:
+        pass
+    # containers — keep tuple as tuple (needed for dict keys & immutability)
     if isinstance(obj, dict):
         return {_sanitize_numpy(k): _sanitize_numpy(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
+    if isinstance(obj, tuple):
+        return tuple(_sanitize_numpy(v) for v in obj)
+    if isinstance(obj, list):
         return [_sanitize_numpy(v) for v in obj]
     return obj
 
@@ -1555,14 +1571,26 @@ async def node_data_analysis(state: AgentState) -> dict:
         exp["results"]["analysis_pending"] = False
         break  # Only analyze the latest pending experiment
 
-    # Sanitize numpy types for JSON serialization
+    # Sanitize numpy/pandas types for JSON serialization (both keys and values)
     import numpy as np
     def _sanitize(obj):
         if isinstance(obj, (np.integer,)): return int(obj)
         if isinstance(obj, (np.floating,)): return float(obj)
-        if isinstance(obj, np.ndarray): return obj.tolist()
+        if isinstance(obj, (np.bool_,)): return bool(obj)
+        if isinstance(obj, (np.str_,)): return str(obj)
+        if isinstance(obj, (np.bytes_,)): return obj.decode("utf-8") if hasattr(obj, "decode") else bytes(obj)
+        if isinstance(obj, (np.datetime64, np.timedelta64)): return str(obj)
+        if isinstance(obj, np.ndarray): return _sanitize(obj.tolist())
+        try:
+            import pandas as pd
+            if isinstance(obj, (pd.Timestamp, pd.Timedelta)): return str(obj)
+            if isinstance(obj, pd.DataFrame): return _sanitize(obj.to_dict(orient="records"))
+            if isinstance(obj, pd.Series): return _sanitize(obj.tolist())
+        except ImportError:
+            pass
         if isinstance(obj, dict): return {_sanitize(k): _sanitize(v) for k, v in obj.items()}
-        if isinstance(obj, (list, tuple)): return [_sanitize(v) for v in obj]
+        if isinstance(obj, tuple): return tuple(_sanitize(v) for v in obj)
+        if isinstance(obj, list): return [_sanitize(v) for v in obj]
         return obj
 
     return _sanitize({
